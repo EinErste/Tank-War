@@ -1,2 +1,2 @@
 # Tank-War
-Project for summer practice at Kyiv-Mohyla Academy
+Reproduction of classic game "Battle City".
