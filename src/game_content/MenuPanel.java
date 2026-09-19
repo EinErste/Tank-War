@@ -140,6 +140,15 @@ public class MenuPanel extends JPanel {
     }
 
     /**
+     * Leaving the window always stops the music, whichever way the menu was left.
+     */
+    @Override
+    public void removeNotify(){
+        stopMusic();
+        super.removeNotify();
+    }
+
+    /**
      * Creates JComboBox which contains levels
      */
     private void addLevelsComboBox(){

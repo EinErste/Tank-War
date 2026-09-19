@@ -273,6 +273,16 @@ public class GameFieldPanel extends JPanel {
     }
 
     /**
+     * Leaving the window always stops the music, the keep-alive timer and the level, whichever way
+     * the panel was left (buttons, level transition, game over or a plain remove).
+     */
+    @Override
+    public void removeNotify(){
+        tearDown();
+        super.removeNotify();
+    }
+
+    /**
      * Minus one respawn and change JLabel
      * <p>
      * Called from the game loop thread, so only the label update is handed over to the Swing thread.

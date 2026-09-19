@@ -7,6 +7,7 @@ import javax.imageio.ImageIO;
 import java.awt.*;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 
@@ -17,6 +18,12 @@ public class Sprite {
 	private int height;
 	private boolean visible;
 	protected BufferedImage image;
+
+	static {
+		//Decode images in memory: ImageIO would otherwise copy every sprite into a temporary cache
+		//file first, which is slower and fails if that cache is removed while the image is read
+		ImageIO.setUseCache(false);
+	}
 
 	public Sprite(int x, int y) {
 		this.x = x;
@@ -50,8 +57,16 @@ public class Sprite {
 	 */
 	protected static BufferedImage readImage(String imageName) {
 		BufferedImage loaded;
-		try (InputStream stream = ResourceFile.open(imageName)) {
-			loaded = ImageIO.read(stream);
+		File file = ResourceFile.find(imageName);
+		try {
+			if (file != null) {
+				//straight from disk: no temporary ImageIO cache file involved
+				loaded = ImageIO.read(file);
+			} else {
+				try (InputStream stream = ResourceFile.open(imageName)) {
+					loaded = ImageIO.read(stream);
+				}
+			}
 		} catch (IOException e) {
 			throw new IllegalStateException("Cannot load image '" + imageName + "'. " + e.getMessage(), e);
 		}

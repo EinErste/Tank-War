@@ -27,6 +27,25 @@ tools/get-deps.sh
 The compiled classes go to `out/`. There is no compile-time dependency at all, `javac -d out $(find src -name '*.java')` is enough.
 The project also still opens as an IntelliJ IDEA module (`.iml` + `.idea/`), output directory `out/`.
 
+## Portable Windows build (no Java needed by the player)
+
+```
+tools\get-deps.bat          (once: fetch the MP3 decoder)
+tools\package.bat           (or: tools\package.bat 1.1 for another version)
+```
+
+This produces `dist/TankWar-<version>-windows-x64-portable.zip` (~82 MB). Unzip it and run
+`TankWar/TankWar.exe` - the archive contains the game, all assets and a minimal Java runtime, so the
+target machine does not need a JDK or JRE installed. `./tools/package.sh` is the same thing for Git Bash.
+
+How it is built: a single self-contained `TankWar.jar` (game classes plus the MP3 decoder) is handed to
+`jpackage --type app-image`, which bundles a `jlink` runtime (`java.desktop` only) and generates the
+native launcher. The launcher icon is generated from `resources/sprites/window/icon.png` by
+`tools/PngToIco.java`. Only the JDK is required (14+); no WiX, no 7-Zip. Bundled library licenses are in
+`tools/THIRD-PARTY-LICENSES.txt`.
+
+`dist/` is not committed - attach the zip to a GitHub release instead.
+
 ## How to play
 
 Arrows move the tank, any other key fires. Destroy all 32 enemy tanks of a stage to advance,

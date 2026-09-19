@@ -51,16 +51,31 @@ public final class ResourceFile {
     }
 
     /**
+     * Looks the resource up as a real file.
+     * <p>
+     * Reading an image straight from a file keeps ImageIO from copying it into a temporary cache
+     * file first, which is both slower and breaks if the cache is removed while it is read
+     * (for example during JVM shutdown).
+     *
+     * @param path resource path
+     * @return the file, or null when the resource is not on disk (packaged inside a jar)
+     */
+    public static File find(String path) {
+        for (File candidate : candidateFiles(path)) {
+            if (candidate.isFile()) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
      * @param path resource path
      * @return true when the resource can be found by {@link #open(String)}
      */
     public static boolean exists(String path) {
-        for (File candidate : candidateFiles(path)) {
-            if (candidate.isFile()) {
-                return true;
-            }
-        }
-        return ResourceFile.class.getClassLoader().getResource(path) != null;
+        return find(path) != null
+                || ResourceFile.class.getClassLoader().getResource(path) != null;
     }
 
     /**
