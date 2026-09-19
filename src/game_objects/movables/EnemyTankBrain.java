@@ -28,57 +28,73 @@ import java.util.function.Predicate;
  *       progress,</li>
  *   <li>the direction it picks is the first one that is actually free, and only faces a wall when
  *       nothing else is open - that keeps the digging, without bumping into walls for no reason,</li>
- *   <li>it commits to a direction for {@link #MIN_COMMIT_TICKS} before re-deciding, which removes the
+ *   <li>it commits to a direction for {@link Settings#minCommitTicks} before re-deciding, which removes the
  *       dithering,</li>
  *   <li>it is blocked by other tanks, so a friend in the way makes it go around quickly
- *       ({@link #TURN_ASIDE_TICKS}),</li>
- *   <li>{@link #NO_PROGRESS_TICKS} without making any progress forces a way out, so nothing can park in
+ *       ({@link Settings#turnAsideTicks}),</li>
+ *   <li>{@link Settings#noProgressTicks} without making any progress forces a way out, so nothing can park in
  *       a corner forever.</li>
  * </ul>
  */
 public class EnemyTankBrain {
 
 	/**
-	 * {@code PRNG&$0F==0}: 1 in 16 chance per tick to re-decide while standing on a tile boundary.
+	 * Every knob of the AI in one place, so {@code Difficulty} can hand in easier or harder ones.
+	 * Ticks are ticks of the game loop, 50 per second.
 	 */
-	private static final int RECONSIDER_ROLL = 16;
+	public static final class Settings {
 
-	/**
-	 * {@code PRNG&$1F==0}: 1 in 32 chance per tick to fire.
-	 */
-	private static final int FIRE_ROLL = 32;
+		/**
+		 * {@code PRNG&$0F==0}: 1 in this many ticks to re-decide while on a tile boundary.
+		 */
+		public final int reconsiderRoll;
+		/**
+		 * {@code PRNG&$1F==0}: 1 in this many ticks to fire.
+		 */
+		public final int fireRoll;
+		/**
+		 * How long an enemy keeps driving the same way before it may re-decide.
+		 */
+		public final int minCommitTicks;
+		/**
+		 * How long it keeps shooting a breakable obstacle before going around instead.
+		 */
+		public final int digTicks;
+		/**
+		 * How long it bumps into something before it turns a corner.
+		 */
+		public final int turnAsideTicks;
+		/**
+		 * Ticks without any progress at all after which it forces its way out, whatever it takes.
+		 */
+		public final int noProgressTicks;
+		/**
+		 * How long a goal lasts before the selector moves on.
+		 */
+		public final int goalTicks;
+		/**
+		 * Extra random ticks added to a goal, so enemies do not all switch at the same moment.
+		 */
+		public final int goalTicksVariation;
 
-	/**
-	 * How long an enemy keeps driving the same way before it may re-decide, in ticks (50 per second).
-	 */
-	private static final int MIN_COMMIT_TICKS = 25;
+		public Settings(int reconsiderRoll, int fireRoll, int minCommitTicks, int digTicks,
+				int turnAsideTicks, int noProgressTicks, int goalTicks, int goalTicksVariation) {
+			this.reconsiderRoll = reconsiderRoll;
+			this.fireRoll = fireRoll;
+			this.minCommitTicks = minCommitTicks;
+			this.digTicks = digTicks;
+			this.turnAsideTicks = turnAsideTicks;
+			this.noProgressTicks = noProgressTicks;
+			this.goalTicks = goalTicks;
+			this.goalTicksVariation = goalTicksVariation;
+		}
 
-	/**
-	 * How long an enemy keeps shooting a breakable obstacle in front of it before it gives up and goes
-	 * around instead, in ticks.
-	 */
-	private static final int DIG_TICKS = 150;
-
-	/**
-	 * How long an enemy bumps into something before it turns a corner, in ticks. A short bump looks
-	 * natural, waiting longer looks broken.
-	 */
-	private static final int TURN_ASIDE_TICKS = 6;
-
-	/**
-	 * Ticks without any progress at all after which an enemy forces its way out, whatever it takes.
-	 */
-	private static final int NO_PROGRESS_TICKS = 75;
-
-	/**
-	 * How long a goal lasts before the selector moves on, in ticks.
-	 */
-	private static final int GOAL_TICKS = 150;
-
-	/**
-	 * Extra random ticks added to a goal, so enemies do not all switch at the same moment.
-	 */
-	private static final int GOAL_TICKS_VARIATION = 300;
+		/**
+		 * The settings the game used before difficulties existed, also used by the tests.
+		 */
+		public static final Settings DEFAULT =
+				new Settings(16, 32, 25, 150, 6, 75, 150, 300);
+	}
 
 	/**
 	 * What an enemy is currently after - the three states of the original's goal selector.
@@ -113,6 +129,7 @@ public class EnemyTankBrain {
 	}
 
 	private final Random random;
+	private final Settings settings;
 	private Goal goal;
 	private int goalTicks;
 	private Direction direction;
@@ -121,7 +138,7 @@ public class EnemyTankBrain {
 	private int ticksWithoutProgress;
 
 	public EnemyTankBrain(Random random) {
-		this(random, Goal.EAGLE);
+		this(random, Goal.EAGLE, Settings.DEFAULT);
 	}
 
 	/**
@@ -129,9 +146,23 @@ public class EnemyTankBrain {
 	 * @param goal   the goal the enemy starts with
 	 */
 	public EnemyTankBrain(Random random, Goal goal) {
+		this(random, goal, Settings.DEFAULT);
+	}
+
+	/**
+	 * @param random   source of randomness
+	 * @param goal     the goal the enemy starts with
+	 * @param settings the knobs of the AI, see {@link Settings}
+	 */
+	public EnemyTankBrain(Random random, Goal goal, Settings settings) {
 		this.random = random;
 		this.goal = goal;
-		this.goalTicks = GOAL_TICKS + random.nextInt(GOAL_TICKS_VARIATION);
+		this.settings = settings;
+		this.goalTicks = settings.goalTicks + random.nextInt(settings.goalTicksVariation);
+	}
+
+	public Settings getSettings() {
+		return settings;
 	}
 
 	public Goal getGoal() {
@@ -184,8 +215,8 @@ public class EnemyTankBrain {
 		}
 		ticksBlocked = 0;
 
-		if (goalChanged || (onTileBoundary && ticksInDirection >= MIN_COMMIT_TICKS
-				&& random.nextInt(RECONSIDER_ROLL) == 0)) {
+		if (goalChanged || (onTileBoundary && ticksInDirection >= settings.minCommitTicks
+				&& random.nextInt(settings.reconsiderRoll) == 0)) {
 			turnTo(pickDirection(bounds, base, player, canMove));
 			return new Decision(direction, true, shouldFire());
 		}
@@ -196,7 +227,7 @@ public class EnemyTankBrain {
 	 * @return true when the tank fires this tick, a 1 in 32 chance, like the original
 	 */
 	public boolean shouldFire() {
-		return random.nextInt(FIRE_ROLL) == 0;
+		return random.nextInt(settings.fireRoll) == 0;
 	}
 
 	/**
@@ -206,13 +237,13 @@ public class EnemyTankBrain {
 	private Decision blocked(Rectangle bounds, Rectangle base, Rectangle player, boolean blockedByTank,
 			boolean blockerIsBreakable, Predicate<Direction> canMove) {
 		//a brick (or the base) in the way is worth shooting: that is how the original digs its way
-		if (blockerIsBreakable && !blockedByTank && ticksBlocked <= DIG_TICKS) {
+		if (blockerIsBreakable && !blockedByTank && ticksBlocked <= settings.digTicks) {
 			return new Decision(direction, true, shouldFire());
 		}
 
 		Direction aside = freeCorner(bounds, targetOf(base, player), canMove);
 		if (aside != null) {
-			if (ticksBlocked >= TURN_ASIDE_TICKS) {
+			if (ticksBlocked >= settings.turnAsideTicks) {
 				turnTo(aside);
 			}
 			return new Decision(direction, true, shouldFire());
@@ -226,7 +257,7 @@ public class EnemyTankBrain {
 		}
 
 		//boxed in on three sides: keep facing the wall, and force a way out if this takes too long
-		if (ticksWithoutProgress >= NO_PROGRESS_TICKS) {
+		if (ticksWithoutProgress >= settings.noProgressTicks) {
 			Direction escape = anyFreeDirection(canMove);
 			if (escape != null) {
 				turnTo(escape);
@@ -256,7 +287,7 @@ public class EnemyTankBrain {
 				goal = Goal.EAGLE;
 				break;
 		}
-		goalTicks = GOAL_TICKS + random.nextInt(GOAL_TICKS_VARIATION);
+		goalTicks = settings.goalTicks + random.nextInt(settings.goalTicksVariation);
 		return true;
 	}
 

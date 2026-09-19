@@ -29,14 +29,6 @@ public class GameField extends JPanel implements Runnable {
 	 */
 	public static final int SCALE = 3;
 	/**
-	 * Enemy count
-	 */
-	public static final int ENEMY_COUNT = 32;
-	/**
-	 * Maximum number of enemies on screen
-	 */
-	public static final int MAX_ENEMIES = 6;
-	/**
 	 * Size of the game map relative to the tile size. Actually its twice as small relative to the Tank because every map tile is divided into four destructible parts
 	 */
 	public static final int MAP_SIZE = 26;
@@ -77,6 +69,10 @@ public class GameField extends JPanel implements Runnable {
 	 */
 	private Level level;
 	/**
+	 * How many enemies come and how hard they push
+	 */
+	private Difficulty difficulty;
+	/**
 	 * Written by the Swing timers, read by the animator thread
 	 */
 	private volatile boolean timeStopped;
@@ -85,8 +81,9 @@ public class GameField extends JPanel implements Runnable {
 	 */
 	private volatile boolean disposed;
 
-	public GameField(Level level, GameFieldPanel gameFieldPanel) {
+	public GameField(Level level, GameFieldPanel gameFieldPanel, Difficulty difficulty) {
 		this.gameFieldPanel = gameFieldPanel;
+		this.difficulty = difficulty;
 		initGameField(level);
 	}
 
@@ -124,7 +121,7 @@ public class GameField extends JPanel implements Runnable {
 	}
 
 	private void spawnEnemyTank() {
-		if (tanks.size() < MAX_ENEMIES+1 && tankAmount < ENEMY_COUNT) {
+		if (tanks.size() < difficulty.getEnemiesOnScreen() + 1 && tankAmount < difficulty.getEnemiesPerStage()) {
 			List<Integer> list = new ArrayList<>();
 			list.add(0);
 			list.add(BYTE*12);
@@ -134,7 +131,8 @@ public class GameField extends JPanel implements Runnable {
 				if (noTankAt(x, 0)) {
 					tankAmount++;
 					tanks.add(new EnemyTank(x, 0, Direction.SOUTH,
-							EnemyType.pickForStage(level.ordinal() + 1, rand)));
+							EnemyType.pickForStage(level.ordinal() + 1, rand, difficulty.getEliteBias()),
+							difficulty.getBrainSettings()));
 					break;
 				}
 			}

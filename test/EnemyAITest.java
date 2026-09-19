@@ -1,3 +1,4 @@
+import game_content.Difficulty;
 import game_content.GameField;
 import game_objects.movables.Direction;
 import game_objects.movables.EnemyTankBrain;
@@ -48,6 +49,7 @@ public class EnemyAITest {
         drivesAroundAnObstacle();
         firesRarelyAndWithoutAiming();
         typeStats();
+        difficultySettings();
 
         System.out.println();
         System.out.println(failures == 0 ? "ENEMY AI TEST PASSED" : "ENEMY AI TEST FAILED (" + failures + ")");
@@ -403,6 +405,60 @@ public class EnemyAITest {
             }
         }
         expect("the last stage does have armour tanks (" + late + ")", late > 400);
+    }
+
+    /**
+     * The difficulty has to change the enemies, not just a label: easier settings shoot less and wander
+     * more, harder settings shoot more and push towards the base for longer.
+     */
+    private static void difficultySettings() {
+        expect("easy puts fewer tanks on the field than hard",
+                Difficulty.EASY.getEnemiesOnScreen() < Difficulty.HARD.getEnemiesOnScreen());
+        expect("hard sends more tanks per stage than easy",
+                Difficulty.HARD.getEnemiesPerStage() > Difficulty.EASY.getEnemiesPerStage());
+        expect("hard gives the player fewer lives than easy",
+                Difficulty.HARD.getLives() < Difficulty.EASY.getLives());
+        expect("normal is the balance the game had before",
+                Difficulty.NORMAL.getEnemiesOnScreen() == 6 && Difficulty.NORMAL.getEnemiesPerStage() == 32
+                        && Difficulty.NORMAL.getLives() == 3);
+        expect("easier settings fire less often than harder ones",
+                Difficulty.EASY.getBrainSettings().fireRoll > Difficulty.HARD.getBrainSettings().fireRoll);
+        expect("easier settings push towards the base for less time",
+                Difficulty.EASY.getBrainSettings().goalTicks < Difficulty.HARD.getBrainSettings().goalTicks);
+
+        //the measured fire rate has to follow the setting
+        int easyShots = shotsIn(Difficulty.EASY, 20000);
+        int hardShots = shotsIn(Difficulty.HARD, 20000);
+        expect("an easy enemy really does shoot less than a hard one (" + easyShots + " vs " + hardShots + ")",
+                easyShots < hardShots);
+
+        //and the type mix has to lean towards the elite tanks on hard
+        int easyElite = eliteCount(Difficulty.EASY);
+        int hardElite = eliteCount(Difficulty.HARD);
+        expect("hard leans towards fast, power and armour tanks (" + easyElite + " vs " + hardElite + " of 2000)",
+                hardElite > easyElite);
+    }
+
+    private static int shotsIn(Difficulty difficulty, int ticks) {
+        EnemyTankBrain brain = new EnemyTankBrain(new Random(53), Goal.EAGLE, difficulty.getBrainSettings());
+        int shots = 0;
+        for (int tick = 0; tick < ticks; tick++) {
+            if (brain.shouldFire()) {
+                shots++;
+            }
+        }
+        return shots;
+    }
+
+    private static int eliteCount(Difficulty difficulty) {
+        Random random = new Random(59);
+        int elite = 0;
+        for (int i = 0; i < 2000; i++) {
+            if (EnemyType.pickForStage(5, random, difficulty.getEliteBias()) != EnemyType.BASIC) {
+                elite++;
+            }
+        }
+        return elite;
     }
 
     /**

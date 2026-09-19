@@ -26,6 +26,8 @@ public class GameFieldPanel extends JPanel {
     private int enemyTanksDestroyed;
     //Current level
     private Level level;
+    //How many enemies come and how hard they push
+    private Difficulty difficulty;
     //Booleans which control music, touched by both the game loop and the Swing thread
     private volatile boolean musicMute;
     private volatile boolean musicStop;
@@ -39,9 +41,10 @@ public class GameFieldPanel extends JPanel {
     private Image mutedImage = ScaledImage.create("resources/sprites/menu/buttons_icon/mute_button.png",50,50);
     private Image unmutedImage = ScaledImage.create("resources/sprites/menu/buttons_icon/unmute_button.png",50,50);
 
-    public GameFieldPanel(GameWindow gameWindow, Level level){
+    public GameFieldPanel(GameWindow gameWindow, Level level, Difficulty difficulty){
         this.gameWindow = gameWindow;
         this.level = level;
+        this.difficulty = difficulty;
         setBounds(0,0,windowWidth,windowHeight);
         setLayout(null);
         setBackground(Color.DARK_GRAY);
@@ -83,7 +86,7 @@ public class GameFieldPanel extends JPanel {
         label.setBounds(720, 0, 75, 75);
         add(label);
 
-        numberEnemyTanksLabel = new JLabel(GameField.ENEMY_COUNT-enemyTanksDestroyed+"x");
+        numberEnemyTanksLabel = new JLabel(difficulty.getEnemiesPerStage()-enemyTanksDestroyed+"x");
         numberEnemyTanksLabel.setFont(new Font(fontName,0,30));
         numberEnemyTanksLabel.setForeground(Color.WHITE);
         numberEnemyTanksLabel.setBounds(625, 0, 100, 100);
@@ -128,7 +131,7 @@ public class GameFieldPanel extends JPanel {
      * Create game field
      */
     private void addGameField(){
-        gameField = new GameField(level, this);
+        gameField = new GameField(level, this, difficulty);
         gameField.setBounds(0,0,624,624);
         add(gameField);
         music.setVolume(GameSound.battleMusicVolume);
@@ -208,7 +211,7 @@ public class GameFieldPanel extends JPanel {
         tearDown();
         gameWindow.remove(this);
         this.setVisible(false);
-        LoadScreenPanel loadScreenPanel = new LoadScreenPanel(level.ordinal()+2);
+        LoadScreenPanel loadScreenPanel = new LoadScreenPanel(level.ordinal()+2, difficulty);
 
         Timer timer = new Timer(1000, new ActionListener() {
             @Override
@@ -216,7 +219,7 @@ public class GameFieldPanel extends JPanel {
                 Level next = Level.values()[level.ordinal()+1];
                 try {
                     gameWindow.remove(loadScreenPanel);
-                    GameFieldPanel gameFieldPanel = new GameFieldPanel(gameWindow, next);
+                    GameFieldPanel gameFieldPanel = new GameFieldPanel(gameWindow, next, difficulty);
                     gameWindow.add(gameFieldPanel);
                     gameWindow.revalidate();
                     gameWindow.repaint();
@@ -260,7 +263,8 @@ public class GameFieldPanel extends JPanel {
         tearDown();
         setVisible(false);
         gameWindow.remove(this);
-        GameEndPanel gameEndPanel = new GameEndPanel(gameWindow, gameResult, level.ordinal()*GameField.ENEMY_COUNT+enemyTanksDestroyed);
+        GameEndPanel gameEndPanel = new GameEndPanel(gameWindow, gameResult,
+                level.ordinal()*difficulty.getEnemiesPerStage()+enemyTanksDestroyed, difficulty);
         gameWindow.add(gameEndPanel);
         gameWindow.repaint();
 
@@ -310,9 +314,9 @@ public class GameFieldPanel extends JPanel {
      */
     public void enemyTankDestroyed(){
         enemyTanksDestroyed++;
-        int tanksLeft = GameField.ENEMY_COUNT-enemyTanksDestroyed;
+        int tanksLeft = difficulty.getEnemiesPerStage()-enemyTanksDestroyed;
         SwingUtilities.invokeLater(() -> numberEnemyTanksLabel.setText(tanksLeft+"x"));
-        if (enemyTanksDestroyed==GameField.ENEMY_COUNT){
+        if (enemyTanksDestroyed==difficulty.getEnemiesPerStage()){
             Timer timer = new Timer(3000, new ActionListener() {
                 @Override
                 public void actionPerformed(ActionEvent e) {

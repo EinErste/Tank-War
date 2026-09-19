@@ -19,11 +19,19 @@ public class EnemyTank extends Tank {
 	private java.awt.image.BufferedImage[] plainSprites;
 
 	public EnemyTank(int x, int y, Direction dir) {
-		this(x, y, dir, EnemyType.BASIC, new EnemyTankBrain(new Random()));
+		this(x, y, dir, EnemyType.BASIC, EnemyTankBrain.Settings.DEFAULT);
 	}
 
 	public EnemyTank(int x, int y, Direction dir, EnemyType type) {
-		this(x, y, dir, type, new EnemyTankBrain(new Random()));
+		this(x, y, dir, type, EnemyTankBrain.Settings.DEFAULT);
+	}
+
+	/**
+	 * @param type     enemy type, which sets speed, bullet speed and how many hits it takes
+	 * @param settings the knobs for the AI, which is what the difficulty changes
+	 */
+	public EnemyTank(int x, int y, Direction dir, EnemyType type, EnemyTankBrain.Settings settings) {
+		this(x, y, dir, type, new EnemyTankBrain(new Random(), EnemyTankBrain.Goal.EAGLE, settings));
 	}
 
 	/**

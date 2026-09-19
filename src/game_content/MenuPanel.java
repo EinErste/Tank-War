@@ -19,6 +19,8 @@ public class MenuPanel extends JPanel {
     private Timer musicTimer;
     //Level chooser
     private JComboBox<Level> levelsBox;
+    //Difficulty chooser
+    private JComboBox<Difficulty> difficultyBox;
     //Background gif
     private JLabel labelBackground;
     //Music boolean
@@ -32,6 +34,7 @@ public class MenuPanel extends JPanel {
         setLayout(null);
         addText();
         addPlayButton();
+        addDifficultyComboBox();
         addLevelsComboBox();
         addBackground();
         playMusic();
@@ -98,7 +101,7 @@ public class MenuPanel extends JPanel {
         playButton.setFont(new Font(fontName,1,50));
         playButton.setForeground(Color.BLACK);
         playButton.setBackground(new Color(172,17,21));
-        playButton.setBounds(250,400,300,80);
+        playButton.setBounds(250,330,300,70);
         playButton.setBorderPainted(false);
         playButton.setVerticalAlignment(SwingConstants.BOTTOM);
         playButton.setFocusPainted(false);
@@ -106,14 +109,16 @@ public class MenuPanel extends JPanel {
             stopMusic();
             gameWindow.remove(MenuPanel.this);
             Level level = (Level)levelsBox.getSelectedItem();
-            LoadScreenPanel loadScreenPanel = new LoadScreenPanel(level.ordinal()+1);
+            Difficulty difficulty = (Difficulty)difficultyBox.getSelectedItem();
+            gameWindow.setRespawns(difficulty.getLives());
+            LoadScreenPanel loadScreenPanel = new LoadScreenPanel(level.ordinal()+1, difficulty);
 
             Timer timer = new Timer(1000, new ActionListener() {
                 @Override
                 public void actionPerformed(ActionEvent e) {
                     try {
                         gameWindow.remove(loadScreenPanel);
-                        GameFieldPanel gameFieldPanel = new GameFieldPanel(gameWindow,level);
+                        GameFieldPanel gameFieldPanel = new GameFieldPanel(gameWindow, level, difficulty);
                         gameWindow.add(gameFieldPanel);
                         gameWindow.revalidate();
                         gameWindow.repaint();
@@ -156,15 +161,34 @@ public class MenuPanel extends JPanel {
     }
 
     /**
+     * Creates JComboBox which contains the difficulties
+     */
+    private void addDifficultyComboBox(){
+        difficultyBox = new JComboBox<>();
+        difficultyBox.setRenderer(new CustomComboBoxCellRenderer<Difficulty>());
+        difficultyBox.setFont(new Font(fontName,0,37));
+        difficultyBox.setForeground(Color.BLACK);
+        difficultyBox.setBackground(new Color(172,17,21));
+        difficultyBox.setBounds(250,415,300,70);
+        difficultyBox.setToolTipText("Choose difficulty");
+        difficultyBox.setMaximumRowCount(3);
+        for (Difficulty difficulty : Difficulty.values()) {
+            difficultyBox.addItem(difficulty);
+        }
+        difficultyBox.setSelectedItem(Difficulty.NORMAL);
+        add(difficultyBox);
+    }
+
+    /**
      * Creates JComboBox which contains levels
      */
     private void addLevelsComboBox(){
         levelsBox = new JComboBox<>();
-        levelsBox.setRenderer(new CustomComboBoxCellRenderer());
+        levelsBox.setRenderer(new CustomComboBoxCellRenderer<Level>());
         levelsBox.setFont(new Font(fontName,0,37));
         levelsBox.setForeground(Color.BLACK);
         levelsBox.setBackground(new Color(172,17,21));
-        levelsBox.setBounds(250,500,300,80);
+        levelsBox.setBounds(250,505,300,70);
         levelsBox.setToolTipText("Choose desired level");
         levelsBox.setMaximumRowCount(2);
         for (Level level : Level.values()) {
@@ -173,8 +197,8 @@ public class MenuPanel extends JPanel {
         add(levelsBox);
     }
 
-    //Help class
-    class CustomComboBoxCellRenderer extends JLabel implements ListCellRenderer<Level> {
+    //Help class, used for both the difficulty and the level chooser
+    class CustomComboBoxCellRenderer<T> extends JLabel implements ListCellRenderer<T> {
 
         CustomComboBoxCellRenderer(){
             setHorizontalAlignment(SwingConstants.CENTER);
@@ -190,8 +214,8 @@ public class MenuPanel extends JPanel {
 
         @Override
         public Component getListCellRendererComponent(
-                JList<? extends Level> list,
-                Level value,
+                JList<? extends T> list,
+                T value,
                 int index,
                 boolean isSelected,
                 boolean cellHasFocus) {

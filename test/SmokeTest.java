@@ -1,3 +1,4 @@
+import game_content.Difficulty;
 import game_content.GameEndPanel;
 import resources_classes.AudioClip;
 import game_content.GameFieldPanel;
@@ -47,6 +48,9 @@ public class SmokeTest {
 
         JButton playButton = findButton((Container) currentPanel(), "Play");
         check("menu has a Play button", playButton != null);
+        JComboBox<?> difficulties = findComboBox((Container) currentPanel(), "Choose difficulty");
+        check("menu has a difficulty chooser", difficulties != null);
+        check("it defaults to normal", difficulties != null && difficulties.getSelectedItem() == Difficulty.NORMAL);
         menuMusic = (AudioClip) readField(currentPanel(), "music");
         check("menu music is playing in the menu", menuMusic != null && menuMusic.isPlaying());
         SwingUtilities.invokeAndWait(playButton::doClick);
@@ -85,12 +89,16 @@ public class SmokeTest {
         }
 
         System.out.println("phase 6: starting level 10 and letting it run");
-        JComboBox<?> levels = findComboBox((Container) currentPanel());
+        JComboBox<?> levels = findComboBox((Container) currentPanel(), "Choose desired level");
         check("menu has a level chooser", levels != null);
         SwingUtilities.invokeAndWait(() -> levels.setSelectedItem(Level.TENTH));
+        SwingUtilities.invokeAndWait(() -> findComboBox((Container) currentPanel(), "Choose difficulty")
+                .setSelectedItem(Difficulty.HARD));
+        check("difficulty can be switched to hard", window.getRespawns() == 3);
         JButton playAgain = findButton((Container) currentPanel(), "Play");
         SwingUtilities.invokeAndWait(playAgain::doClick);
         sleep(3500);
+        check("hard gives the player two lives", window.getRespawns() == Difficulty.HARD.getLives());
         check("level 10 is running", currentPanel() instanceof GameFieldPanel);
 
         System.out.println();
@@ -146,16 +154,17 @@ public class SmokeTest {
         return null;
     }
 
-    static JComboBox<?> findComboBox(Container container) {
+    /** Finds the chooser with this tooltip, so the check does not depend on the order of the boxes. */
+    static JComboBox<?> findComboBox(Container container, String tooltip) {
         if (container == null) {
             return null;
         }
         for (Component component : container.getComponents()) {
-            if (component instanceof JComboBox) {
+            if (component instanceof JComboBox && tooltip.equals(((JComboBox<?>) component).getToolTipText())) {
                 return (JComboBox<?>) component;
             }
             if (component instanceof Container) {
-                JComboBox<?> found = findComboBox((Container) component);
+                JComboBox<?> found = findComboBox((Container) component, tooltip);
                 if (found != null) {
                     return found;
                 }

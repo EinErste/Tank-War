@@ -1,3 +1,4 @@
+import game_content.Difficulty;
 import game_content.GameField;
 import game_objects.map_objects.MapObject;
 import game_objects.map_objects.impassables.Base;
@@ -32,7 +33,7 @@ public class LogicTest {
 
     static void collisionRule() throws Exception {
         System.out.println("== collision rule (tank must be able to leave a wall it is stuck in)");
-        GameField field = new GameField(Level.FIRST, null);
+        GameField field = new GameField(Level.FIRST, null, Difficulty.NORMAL);
         field.setBounds(0, 0, GameField.FIELD_DIMENSIONS, GameField.FIELD_DIMENSIONS);
         Method check = GameField.class.getDeclaredMethod("checkWallCollisions", Tank.class);
         check.setAccessible(true);

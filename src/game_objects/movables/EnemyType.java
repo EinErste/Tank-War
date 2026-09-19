@@ -108,14 +108,29 @@ public enum EnemyType {
 	 * @return the type to spawn
 	 */
 	public static EnemyType pickForStage(int stageNumber, Random random) {
+		return pickForStage(stageNumber, random, 1);
+	}
+
+	/**
+	 * Picks the type of the next enemy to spawn for a stage, with the weights of the elite types scaled
+	 * by the difficulty. Basic tanks are never scaled, so an easy stage stays full of them.
+	 *
+	 * @param stageNumber 1 based stage number
+	 * @param random      source of randomness
+	 * @param eliteBias   multiplier for the fast, power and armour weights
+	 * @return the type to spawn
+	 */
+	public static EnemyType pickForStage(int stageNumber, Random random, double eliteBias) {
 		int[] mix = STAGE_MIX[Math.min(Math.max(stageNumber, 1), STAGE_MIX.length) - 1];
-		int total = 0;
-		for (int weight : mix) {
-			total += weight;
-		}
-		int roll = random.nextInt(total);
+		double[] weights = new double[values().length];
+		double total = 0;
 		for (EnemyType type : values()) {
-			roll -= mix[type.ordinal()];
+			weights[type.ordinal()] = type == BASIC ? mix[type.ordinal()] : mix[type.ordinal()] * eliteBias;
+			total += weights[type.ordinal()];
+		}
+		double roll = random.nextDouble() * total;
+		for (EnemyType type : values()) {
+			roll -= weights[type.ordinal()];
 			if (roll < 0) {
 				return type;
 			}

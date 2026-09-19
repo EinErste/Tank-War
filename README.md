@@ -48,9 +48,27 @@ native launcher. The launcher icon is generated from `resources/sprites/window/i
 
 ## How to play
 
-Arrows move the tank, any other key fires. Destroy all 32 enemy tanks of a stage to advance,
-do not let the flag (your base) get shot, and pick up the power-ups for an upgrade, an extra life
-or a time stop. Ten stages are selectable from the menu.
+Arrows move the tank, any other key fires. Destroy every enemy tank of a stage to advance, do not let
+the flag (your base) get shot, and pick up the power-ups for an upgrade, an extra life or a time stop.
+The menu lets you pick a stage (all ten) and a difficulty.
+
+## Difficulty
+
+The menu has a difficulty chooser next to the stage chooser. It changes how many enemies come, how hard
+they push and how many lives you get:
+
+| | EASY | NORMAL | HARD |
+|---|---|---|---|
+| enemies on screen | 4 | 6 | 8 |
+| enemies per stage | 20 | 32 | 40 |
+| lives | 5 | 3 | 2 |
+| enemy fire roll (1 in N per tick) | 48 | 32 | 22 |
+| how long they push towards the base | short | medium | long |
+| fast/power/armour share of the mix | halved | as designed | 1.6x |
+
+All of it lives in `src/game_content/Difficulty.java` (counts and lives) and in
+`EnemyTankBrain.Settings` (the AI knobs, explained there). Adding a fourth difficulty is one line in
+the enum.
 
 ## Tests
 
@@ -66,15 +84,17 @@ Builds the game, compiles `test/` into `test/out` and runs six tests:
 * `AudioClipTest` - the audio engine: streaming music keeps playing, sound effects overlap, `stop()`
   works, volume 0 is silent, a missing file is reported instead of thrown.
 * `AudioDecodeTest` - decodes every file in `resources/music` and fails if one yields no sound.
-* `EnemyAITest` - the enemy AI rules: it only re-decides on a tile boundary and on a 1 in 16 roll,
+* `EnemyAITest` - the enemy AI rules and the difficulty settings: it only re-decides on a tile
+  boundary and on a 1 in 16 roll,
   rotates its goal between base/wander/player, takes the dominant axis towards its target, fires on a
   1 in 32 roll without aiming, shoots through what it can break, goes around what it cannot, never
   reverses into its own tracks, and the four types have their documented stats.
 * `MenuBackgroundTest` - screenshots the menu and fails if it comes out blank (that is how the white
   menu of the packaged build was caught). Writes `test/out/menu-screenshot.png`.
-* `SmokeTest` - drives the real UI the way a player does (menu, Play, level 1, stage transition,
-  game over, Menu, stage 10) and asserts that the menu music stops when a level starts. It opens a
-  window, so it is skipped on a headless machine.
+* `SmokeTest` - drives the real UI the way a player does (menu, difficulty and stage choosers, Play,
+  level 1, stage transition, game over, Menu, stage 10 on hard) and asserts that the menu music stops
+  when a level starts and that hard really gives two lives. It opens a window, so it is skipped on a
+  headless machine.
 
 The MP3 dependent checks are skipped with a notice when `lib/` is empty, since the JDK cannot read
 MP3 on its own.
