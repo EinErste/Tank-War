@@ -34,7 +34,7 @@ public class GameField extends JPanel implements Runnable {
 	/**
 	 * Maximum number of enemies on screen
 	 */
-	public static final int MAX_ENEMIES = 8;
+	public static final int MAX_ENEMIES = 6;
 	/**
 	 * Size of the game map relative to the tile size. Actually its twice as small relative to the Tank because every map tile is divided into four destructible parts
 	 */
@@ -72,6 +72,10 @@ public class GameField extends JPanel implements Runnable {
 	private Timer timeStopTimer;
 	private Random rand;
 	/**
+	 * Stage being played, used to pick the enemy mix
+	 */
+	private Level level;
+	/**
 	 * Written by the Swing timers, read by the animator thread
 	 */
 	private volatile boolean timeStopped;
@@ -97,6 +101,7 @@ public class GameField extends JPanel implements Runnable {
 	}
 
 	private void initMap(Level level) {
+		this.level = level;
 		addKeyListener(new Adapter());
 		map = Map.getLevelMap(level);
 		base = map.getBase();
@@ -127,7 +132,8 @@ public class GameField extends JPanel implements Runnable {
 			for (int x : list ) {
 				if (noTankAt(x, 0)) {
 					tankAmount++;
-					tanks.add(new EnemyTank(x, 0, Direction.SOUTH));
+					tanks.add(new EnemyTank(x, 0, Direction.SOUTH,
+							EnemyType.pickForStage(level.ordinal() + 1, rand)));
 					break;
 				}
 			}
@@ -254,23 +260,84 @@ public class GameField extends JPanel implements Runnable {
 
 	private void checkAllTanksCollision() {
 		for (Tank t : tanks) {
-			if(! (t instanceof EnemyTank && timeStopped) ) {
-				if (t instanceof EnemyTank) {
-					t.fire();
-					if (rand.nextDouble() < 0.02)
-						t.changeDirection(Direction.values()[rand.nextInt(Direction.values().length)]);
+			if (t instanceof EnemyTank) {
+				if (!timeStopped) {
+					//frozen by the time stop power-up, the original suppresses enemy fire the same way
+					driveEnemyTank((EnemyTank) t);
 				}
-				if (!checkWallCollisions(t) && !checkTankCollisions(t)) {
-					t.move();
-				} else if(t instanceof EnemyTank){
-					for (int i = 0; i < 8; i++) {
-						t.changeDirection(Direction.values()[rand.nextInt(Direction.values().length)]);
-						if(!checkWallCollisions(t) && !checkTankCollisions(t))
-							break;
-					}
-				}
+			} else if (!checkWallCollisions(t) && !checkTankCollisions(t)) {
+				t.move();
 			}
 		}
+	}
+
+	/**
+	 * Lets the brain of an enemy tank decide what to do, the way the original's AI does it:
+	 * a new direction only on a tile boundary and on a 1 in 16 roll, otherwise it drives on.
+	 * <p>
+	 * The brain only knows rectangles and the {@code canMove} test below, the map itself stays here.
+	 */
+	private void driveEnemyTank(EnemyTank enemy) {
+		Rectangle baseBounds = base.getBounds();
+		Rectangle playerBounds = playerTank.isVisible() ? playerTank.getBounds() : null;
+		EnemyTankBrain brain = enemy.getBrain();
+
+		EnemyTankBrain.Decision decision = brain.decide(enemy.getBounds(), baseBounds, playerBounds,
+				enemy.getDirection(), onTileBoundary(enemy),
+				checkWallCollisions(enemy) || checkTankCollisions(enemy),
+				candidate -> !hitsWall(enemy, steppedBounds(enemy, candidate))
+						&& !hitsTank(enemy, steppedBounds(enemy, candidate)));
+
+		if (decision.direction != enemy.getDirection()) {
+			enemy.changeDirection(decision.direction);
+		}
+		if (decision.fire) {
+			enemy.fire();
+		}
+		if (!decision.hold && !checkWallCollisions(enemy) && !checkTankCollisions(enemy)) {
+			enemy.move();
+		}
+	}
+
+	/**
+	 * @return true when the tank stands exactly on a tile boundary, the only place an enemy is allowed
+	 *         to change its mind ({@code posX&7==0 && posY&7==0} in the original)
+	 */
+	private static boolean onTileBoundary(Tank tank) {
+		int step = tank.getSpeed();
+		return nearTileBoundary(tank.getX(), step) && nearTileBoundary(tank.getY(), step);
+	}
+
+	/**
+	 * @return true when the coordinate sits on a tile boundary, or within one step of it - a tank can
+	 *         only ever land exactly on boundaries when its speed divides the tile size
+	 */
+	private static boolean nearTileBoundary(int coordinate, int step) {
+		int remainder = Math.floorMod(coordinate, BYTE);
+		return remainder <= step || BYTE - remainder <= step;
+	}
+
+	/**
+	 * @return the bounds a tank would have after one step in this direction
+	 */
+	private static Rectangle steppedBounds(Tank tank, Direction direction) {
+		Rectangle bounds = tank.getBounds();
+		int step = tank.getSpeed();
+		switch (direction) {
+			case WEST:
+				bounds.x -= step;
+				break;
+			case EAST:
+				bounds.x += step;
+				break;
+			case NORTH:
+				bounds.y -= step;
+				break;
+			default:
+				bounds.y += step;
+				break;
+		}
+		return bounds;
 	}
 
 	private void checkTankRespawns(){
@@ -295,30 +362,44 @@ public class GameField extends JPanel implements Runnable {
 	 * Checking collisions of tanks with other tanks on the map
 	 */
 	private boolean checkTankCollisions(Tank tank) {
-		Rectangle nextBounds = tank.getTheoreticalBounds();
-		Rectangle currentBounds = tank.getBounds();
-		for (Tank t : tanks) {
-			//A tank that already overlaps another one (possible after a grid snap) has to be able to back out
-			if (t != tank && nextBounds.intersects(t.getBounds()) && !currentBounds.intersects(t.getBounds()))
-				return true;
-		}
-		return false;
+		return hitsTank(tank, tank.getTheoreticalBounds());
 	}
 
 	/**
 	 * Checking collisions of tanks with other objects on the map
 	 */
 	private boolean checkWallCollisions(Tank tank) {
-		Rectangle nextBounds = tank.getTheoreticalBounds();
+		return hitsWall(tank, tank.getTheoreticalBounds());
+	}
+
+	/**
+	 * @param bounds where the tank would be
+	 * @return true when another tank is in the way that this one is not already overlapping
+	 */
+	private boolean hitsTank(Tank tank, Rectangle bounds) {
+		Rectangle currentBounds = tank.getBounds();
+		for (Tank t : tanks) {
+			//A tank that already overlaps another one (possible after a grid snap) has to be able to back out
+			if (t != tank && bounds.intersects(t.getBounds()) && !currentBounds.intersects(t.getBounds()))
+				return true;
+		}
+		return false;
+	}
+
+	/**
+	 * @param bounds where the tank would be
+	 * @return true when a wall is in the way that this one is not already overlapping, or when the
+	 *         tank would leave the field
+	 */
+	private boolean hitsWall(Tank tank, Rectangle bounds) {
 		Rectangle currentBounds = tank.getBounds();
 		for (MapObject mo : map) {
 			//Only obstacles the tank is not standing in already block the move: turning snaps a tank
 			//onto the grid and could otherwise leave it stuck inside a wall for the rest of the level
-			if (mo.isCollidable() && nextBounds.intersects(mo.getBounds()) && !currentBounds.intersects(mo.getBounds()))
+			if (mo.isCollidable() && bounds.intersects(mo.getBounds()) && !currentBounds.intersects(mo.getBounds()))
 				return true;
 		}
-		return !this.getBounds().contains(nextBounds);
-
+		return !this.getBounds().contains(bounds);
 	}
 
 	//Timer must be initialized only one time or duplicate menu appears
@@ -360,7 +441,7 @@ public class GameField extends JPanel implements Runnable {
 				if (b.isVisible() && bBounds.intersects(t.getBounds())) {
 					b.destroy();
 					if(!(b instanceof EnemyBullet) || t instanceof PlayerTank) {
-						t.destroy();
+						t.hit();
 						explosions.add(b.getExplosion());
 						if (t instanceof EnemyTank) {
 							gameFieldPanel.enemyTankDestroyed();

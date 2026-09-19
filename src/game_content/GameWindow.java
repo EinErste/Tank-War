@@ -90,6 +90,29 @@ public class GameWindow extends JFrame {
 		}
 	}
 
+	/**
+	 * Shows what went wrong instead of leaving the player staring at a screen that never changes.
+	 * Levels are built inside Swing timers, where an exception would otherwise go nowhere.
+	 *
+	 * @param what  what was being done
+	 * @param error what went wrong
+	 */
+	public static void showError(String what, Throwable error) {
+		error.printStackTrace();
+		JOptionPane.showMessageDialog(null, what + "\n" + error,
+				"Tank War", JOptionPane.ERROR_MESSAGE);
+	}
+
+	/**
+	 * Brings the menu back, used to recover from a level that could not be started.
+	 */
+	public void showMenu() {
+		getContentPane().removeAll();
+		setRespawns(3);
+		add(new MenuPanel(this));
+		revalidate();
+		repaint();
+	}
 	public static void main(String[] args) {
 
 		EventQueue.invokeLater(() -> {

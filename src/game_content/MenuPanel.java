@@ -111,11 +111,18 @@ public class MenuPanel extends JPanel {
             Timer timer = new Timer(1000, new ActionListener() {
                 @Override
                 public void actionPerformed(ActionEvent e) {
-                    gameWindow.remove(loadScreenPanel);
-                    GameFieldPanel gameFieldPanel = new GameFieldPanel(gameWindow,level);
-                    gameWindow.add(gameFieldPanel);
-                    gameWindow.repaint();
-                    gameFieldPanel.requestFocusField();
+                    try {
+                        gameWindow.remove(loadScreenPanel);
+                        GameFieldPanel gameFieldPanel = new GameFieldPanel(gameWindow,level);
+                        gameWindow.add(gameFieldPanel);
+                        gameWindow.revalidate();
+                        gameWindow.repaint();
+                        gameFieldPanel.requestFocusField();
+                    } catch (Throwable t) {
+                        //a level that cannot be built would otherwise leave the player on this screen
+                        GameWindow.showError("Stage " + (level.ordinal()+1) + " could not be started.", t);
+                        gameWindow.showMenu();
+                    }
                 }
             });
             timer.setRepeats(false);
