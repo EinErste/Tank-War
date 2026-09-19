@@ -7,3 +7,7 @@
 
 # Compiled files
 out/
+*.class
+
+# Optional dependencies downloaded by tools/get-deps.*
+lib/
