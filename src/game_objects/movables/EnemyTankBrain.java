@@ -5,31 +5,36 @@ import java.util.Random;
 import java.util.function.Predicate;
 
 /**
- * Enemy tank decision making, modelled on the AI of the original Battle City (Famicom).
+ * Enemy tank decision making: the behaviour of the original Battle City, with the parts that make it
+ * twitchy in this engine replaced by something more deliberate.
  * <p>
- * The original logic, as far as it has been reverse engineered, and how it maps onto this class:
+ * <b>Kept from the original</b> (see {@code REVERSE.md} of the Famicom disassembly for the routines):
  * <ul>
- *   <li><b>When to re-decide</b> ({@code EntityMovementAI}): an enemy picks a new direction only while
- *       it stands on a tile boundary and a 1 in 16 random roll hits
- *       ({@code posX&7==0 && posY&7==0 && PRNG&$0F==0}), and it skips its move on that tick. So most
- *       ticks an enemy just keeps driving in the direction it has.</li>
- *   <li><b>What to aim for</b> ({@code SpeedCtrlMove}): a rotating goal selector - chase the eagle
- *       (the base), then wander randomly, then chase the player, and around again. That is the
- *       "alternates between a random detour and advancing, but eventually goes after your base"
- *       behaviour of the original.</li>
- *   <li><b>Which direction</b> ({@code CalcDirToTarget}): the axis with the larger distance to the
- *       target is tried first (abs-delta weighting), the other axis second, any free direction last.
- *       A wander either re-rolls towards the target or turns 90 degrees
- *       ({@code RandomDirChange}: 50% goal, 25% left, 25% right).</li>
- *   <li><b>When blocked</b> ({@code EntityMovementBlocked}): 1 in 4 blocked enemies turns around,
- *       the rest just bump into the wall and keep facing it.</li>
- *   <li><b>When to shoot</b> ({@code EnemyFireTick}): a 1 in 32 chance per tick, without aiming -
- *       the bullet simply leaves in the direction the barrel points.</li>
+ *   <li>an enemy re-decides on a tile boundary on a 1 in 16 roll, and skips its move on that tick
+ *       ({@code EntityMovementAI}), so it drives in straight lines,</li>
+ *   <li>the goal rotates between chasing the base, wandering and chasing the player
+ *       ({@code SpeedCtrlMove}) - "a random detour, but eventually it goes for your base",</li>
+ *   <li>the direction towards a target is the axis with the larger distance ({@code CalcDirToTarget}),</li>
+ *   <li>it fires on a 1 in 32 roll per tick, without aiming ({@code EnemyFireTick}),</li>
+ *   <li>it shoots the bricks that are in its way, which is how the original's tanks dig towards the
+ *       base,</li>
+ *   <li>a wandering enemy turns 90 degree corners ({@code RandomDirChange}).</li>
  * </ul>
- * Two details are modelled instead of copied, because the ROM counter behind the goal selector is not
- * documented: how long each goal lasts (a few seconds here), and a blocked enemy that keeps bumping
- * gives up and re-decides after {@link #STUCK_TICKS} - the original's tanks drive through each other,
- * ours collide, so without that an enemy could wait behind a friend forever.
+ * <b>Changed, because this game is not the original</b> (the original lets tanks drive through each
+ * other and its enemies bounce off walls a lot, which here reads as jitter and standing still):
+ * <ul>
+ *   <li>a blocked enemy no longer reverses 25% of the time ({@code EntityMovementBlocked}) - it turns a
+ *       free corner instead and only backs out when both sides are blocked, so it does not undo its
+ *       progress,</li>
+ *   <li>the direction it picks is the first one that is actually free, and only faces a wall when
+ *       nothing else is open - that keeps the digging, without bumping into walls for no reason,</li>
+ *   <li>it commits to a direction for {@link #MIN_COMMIT_TICKS} before re-deciding, which removes the
+ *       dithering,</li>
+ *   <li>it is blocked by other tanks, so a friend in the way makes it go around quickly
+ *       ({@link #TURN_ASIDE_TICKS}),</li>
+ *   <li>{@link #NO_PROGRESS_TICKS} without making any progress forces a way out, so nothing can park in
+ *       a corner forever.</li>
+ * </ul>
  */
 public class EnemyTankBrain {
 
@@ -39,29 +44,41 @@ public class EnemyTankBrain {
 	private static final int RECONSIDER_ROLL = 16;
 
 	/**
-	 * {@code PRNG&3==0}: 1 in 4 chance that a blocked enemy turns around instead of bumping.
-	 */
-	private static final int TURN_AROUND_ROLL = 4;
-
-	/**
 	 * {@code PRNG&$1F==0}: 1 in 32 chance per tick to fire.
 	 */
 	private static final int FIRE_ROLL = 32;
 
 	/**
-	 * How many ticks a blocked enemy keeps bumping before it re-decides anyway.
+	 * How long an enemy keeps driving the same way before it may re-decide, in ticks (50 per second).
 	 */
-	private static final int STUCK_TICKS = 25;
+	private static final int MIN_COMMIT_TICKS = 25;
 
 	/**
-	 * How long a goal lasts before the selector moves on, in ticks (50 per second).
+	 * How long an enemy keeps shooting a breakable obstacle in front of it before it gives up and goes
+	 * around instead, in ticks.
 	 */
-	private static final int GOAL_TICKS = 120;
+	private static final int DIG_TICKS = 150;
+
+	/**
+	 * How long an enemy bumps into something before it turns a corner, in ticks. A short bump looks
+	 * natural, waiting longer looks broken.
+	 */
+	private static final int TURN_ASIDE_TICKS = 6;
+
+	/**
+	 * Ticks without any progress at all after which an enemy forces its way out, whatever it takes.
+	 */
+	private static final int NO_PROGRESS_TICKS = 75;
+
+	/**
+	 * How long a goal lasts before the selector moves on, in ticks.
+	 */
+	private static final int GOAL_TICKS = 150;
 
 	/**
 	 * Extra random ticks added to a goal, so enemies do not all switch at the same moment.
 	 */
-	private static final int GOAL_TICKS_VARIATION = 240;
+	private static final int GOAL_TICKS_VARIATION = 300;
 
 	/**
 	 * What an enemy is currently after - the three states of the original's goal selector.
@@ -80,7 +97,7 @@ public class EnemyTankBrain {
 		 */
 		public final Direction direction;
 		/**
-		 * True when the tank should not move this tick (it just re-decided, like the original).
+		 * True when the tank should not move this tick (it just re-decided, or it is digging).
 		 */
 		public final boolean hold;
 		/**
@@ -99,7 +116,9 @@ public class EnemyTankBrain {
 	private Goal goal;
 	private int goalTicks;
 	private Direction direction;
-	private int blockedTicks;
+	private int ticksInDirection;
+	private int ticksBlocked;
+	private int ticksWithoutProgress;
 
 	public EnemyTankBrain(Random random) {
 		this(random, Goal.EAGLE);
@@ -127,65 +146,104 @@ public class EnemyTankBrain {
 	}
 
 	/**
+	 * Tells the brain that the tank really moved, which resets its patience.
+	 */
+	public void onMoved() {
+		ticksWithoutProgress = 0;
+	}
+
+	/**
 	 * Decides what the enemy does this tick.
 	 *
-	 * @param bounds         where the tank is now
-	 * @param base           the base of the player, the "eagle" of the original
-	 * @param player         the player tank, or null when it is not on the field
-	 * @param facing         the direction the tank is facing now, used until the brain has decided once
-	 * @param onTileBoundary true when the tank stands exactly on a tile boundary, which is the only
-	 *                       place the original lets an enemy re-decide
-	 * @param blocked        true when the tank cannot drive on in its current direction
-	 * @param canMove        tests whether a direction is free
+	 * @param bounds              where the tank is now
+	 * @param base                the base of the player, the "eagle" of the original
+	 * @param player              the player tank, or null when it is not on the field
+	 * @param facing              the direction the tank faces now, used until the brain has decided once
+	 * @param onTileBoundary      true when the tank stands on a tile boundary, the only place the
+	 *                            original lets an enemy re-decide
+	 * @param blocked             true when the tank cannot drive on in its current direction
+	 * @param blockedByTank       true when it is another tank that is in the way
+	 * @param blockerIsBreakable  true when the obstacle in front can be shot away (a brick or the base)
+	 * @param canMove             tests whether a direction is free
 	 * @return what to do this tick
 	 */
 	public Decision decide(Rectangle bounds, Rectangle base, Rectangle player, Direction facing,
-			boolean onTileBoundary, boolean blocked, Predicate<Direction> canMove) {
+			boolean onTileBoundary, boolean blocked, boolean blockedByTank, boolean blockerIsBreakable,
+			Predicate<Direction> canMove) {
 		if (direction == null) {
 			//the tank was spawned facing somewhere, start from that
 			direction = facing != null ? facing : Direction.SOUTH;
 		}
-		advanceGoal();
+		boolean goalChanged = advanceGoal();
+		ticksInDirection++;
+		ticksWithoutProgress++;
 
 		if (blocked) {
-			blockedTicks++;
-			if (random.nextInt(TURN_AROUND_ROLL) == 0) {
-				//BlockedFlipDir: the original reverses on the spot, it does not re-plan
-				direction = opposite(direction);
-				return new Decision(direction, true, shouldFire());
-			}
-			if (blockedTicks >= STUCK_TICKS) {
-				//3 out of 4 blocked enemies just bump into the wall and a reversal does not count as
-				//progress either, so an enemy that keeps bouncing off walls re-plans every
-				//STUCK_TICKS ticks instead of driving up and down the same corridor forever
-				blockedTicks = 0;
-				direction = pickDirection(bounds, base, player, canMove);
-				return new Decision(direction, true, shouldFire());
-			}
-			return new Decision(direction, true, shouldFire());
+			ticksBlocked++;
+			return blocked(bounds, base, player, blockedByTank, blockerIsBreakable, canMove);
 		}
-		blockedTicks = 0;
+		ticksBlocked = 0;
 
-		if (onTileBoundary && random.nextInt(RECONSIDER_ROLL) == 0) {
-			direction = pickDirection(bounds, base, player, canMove);
+		if (goalChanged || (onTileBoundary && ticksInDirection >= MIN_COMMIT_TICKS
+				&& random.nextInt(RECONSIDER_ROLL) == 0)) {
+			turnTo(pickDirection(bounds, base, player, canMove));
 			return new Decision(direction, true, shouldFire());
 		}
 		return new Decision(direction, false, shouldFire());
 	}
 
 	/**
-	 * @return true when the tank fires this tick, a 1 in 32 chance, exactly like the original
+	 * @return true when the tank fires this tick, a 1 in 32 chance, like the original
 	 */
 	public boolean shouldFire() {
 		return random.nextInt(FIRE_ROLL) == 0;
 	}
 
 	/**
-	 * Rotates through the goals over time: base, wander, player, base, ...
+	 * What to do when the way ahead is blocked: shoot through it if that can work, otherwise go around,
+	 * otherwise back out.
 	 */
-	private void advanceGoal() {
+	private Decision blocked(Rectangle bounds, Rectangle base, Rectangle player, boolean blockedByTank,
+			boolean blockerIsBreakable, Predicate<Direction> canMove) {
+		//a brick (or the base) in the way is worth shooting: that is how the original digs its way
+		if (blockerIsBreakable && !blockedByTank && ticksBlocked <= DIG_TICKS) {
+			return new Decision(direction, true, shouldFire());
+		}
+
+		Direction aside = freeCorner(bounds, targetOf(base, player), canMove);
+		if (aside != null) {
+			if (ticksBlocked >= TURN_ASIDE_TICKS) {
+				turnTo(aside);
+			}
+			return new Decision(direction, true, shouldFire());
+		}
+
+		//nothing beside us: back out of the dead end
+		Direction back = opposite(direction);
+		if (canMove.test(back)) {
+			turnTo(back);
+			return new Decision(direction, true, shouldFire());
+		}
+
+		//boxed in on three sides: keep facing the wall, and force a way out if this takes too long
+		if (ticksWithoutProgress >= NO_PROGRESS_TICKS) {
+			Direction escape = anyFreeDirection(canMove);
+			if (escape != null) {
+				turnTo(escape);
+				ticksWithoutProgress = 0;
+			}
+		}
+		return new Decision(direction, true, shouldFire());
+	}
+
+	/**
+	 * Rotates through the goals over time: base, wander, player, base, ...
+	 *
+	 * @return true when the goal just changed
+	 */
+	private boolean advanceGoal() {
 		if (--goalTicks > 0) {
-			return;
+			return false;
 		}
 		switch (goal) {
 			case EAGLE:
@@ -199,6 +257,15 @@ public class EnemyTankBrain {
 				break;
 		}
 		goalTicks = GOAL_TICKS + random.nextInt(GOAL_TICKS_VARIATION);
+		return true;
+	}
+
+	private void turnTo(Direction newDirection) {
+		if (newDirection != null && newDirection != direction) {
+			direction = newDirection;
+			ticksInDirection = 0;
+			ticksBlocked = 0;
+		}
 	}
 
 	private Direction pickDirection(Rectangle bounds, Rectangle base, Rectangle player, Predicate<Direction> canMove) {
@@ -206,20 +273,21 @@ public class EnemyTankBrain {
 			case PLAYER:
 				return towards(bounds, player != null ? player : base, canMove);
 			case RANDOM:
-				//half the time the wander still heads somewhere, otherwise it turns a corner
+				//half the time the wander still heads for the base, otherwise it takes a corner
 				if (random.nextBoolean()) {
 					return towards(bounds, base, canMove);
 				}
-				Direction turn = random.nextBoolean() ? leftOf(direction) : rightOf(direction);
-				return canMove.test(turn) ? turn : towards(bounds, base, canMove);
+				Direction detour = freeCorner(bounds, base, canMove);
+				return detour != null ? detour : towards(bounds, base, canMove);
 			default:
 				return towards(bounds, base, canMove);
 		}
 	}
 
 	/**
-	 * The abs-delta weighting of {@code CalcDirToTarget}: the axis with more distance left is tried
-	 * first, the other one second, and any free direction is better than standing still.
+	 * The abs-delta weighting of {@code CalcDirToTarget} - the axis with the larger distance first, the
+	 * other one second - but the first direction that is actually free wins, and only when both are
+	 * blocked does it face the wall in the way and shoot it.
 	 */
 	private Direction towards(Rectangle bounds, Rectangle target, Predicate<Direction> canMove) {
 		int dx = centre(target.x, target.width) - centre(bounds.x, bounds.width);
@@ -244,12 +312,64 @@ public class EnemyTankBrain {
 		if (canMove.test(second)) {
 			return second;
 		}
+		//both ways are blocked: face the way we want to go and shoot through it
+		return first;
+	}
+
+	/**
+	 * @return a free direction 90 degrees off the current one, preferring the side that gets closer to
+	 *         the target, or null when neither side is open
+	 */
+	private Direction freeCorner(Rectangle bounds, Rectangle target, Predicate<Direction> canMove) {
+		Direction left = leftOf(direction);
+		Direction right = rightOf(direction);
+		boolean leftIsFree = canMove.test(left);
+		boolean rightIsFree = canMove.test(right);
+		if (!leftIsFree && !rightIsFree) {
+			return null;
+		}
+		if (leftIsFree && rightIsFree) {
+			int leftProgress = progress(left, bounds, target);
+			int rightProgress = progress(right, bounds, target);
+			if (leftProgress == rightProgress) {
+				return random.nextBoolean() ? left : right;
+			}
+			return leftProgress > rightProgress ? left : right;
+		}
+		return leftIsFree ? left : right;
+	}
+
+	private Direction anyFreeDirection(Predicate<Direction> canMove) {
 		for (Direction candidate : Direction.values()) {
 			if (canMove.test(candidate)) {
 				return candidate;
 			}
 		}
-		return direction != null ? direction : Direction.SOUTH;
+		return null;
+	}
+
+	/**
+	 * @return the player when the goal says so and the player is on the field, the base otherwise
+	 */
+	private Rectangle targetOf(Rectangle base, Rectangle player) {
+		return goal == Goal.PLAYER && player != null ? player : base;
+	}
+
+	/**
+	 * @return how much closer to the target a one step move in this direction gets
+	 */
+	private static int progress(Direction candidate, Rectangle bounds, Rectangle target) {
+		int fromX = centre(bounds.x, bounds.width);
+		int fromY = centre(bounds.y, bounds.height);
+		int toX = centre(target.x, target.width);
+		int toY = centre(target.y, target.height);
+
+		int stepX = candidate == Direction.EAST ? 1 : candidate == Direction.WEST ? -1 : 0;
+		int stepY = candidate == Direction.SOUTH ? 1 : candidate == Direction.NORTH ? -1 : 0;
+
+		int before = Math.abs(toX - fromX) + Math.abs(toY - fromY);
+		int after = Math.abs(toX - (fromX + stepX)) + Math.abs(toY - (fromY + stepY));
+		return before - after;
 	}
 
 	private static Direction opposite(Direction direction) {

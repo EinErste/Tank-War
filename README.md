@@ -67,9 +67,9 @@ Builds the game, compiles `test/` into `test/out` and runs six tests:
   works, volume 0 is silent, a missing file is reported instead of thrown.
 * `AudioDecodeTest` - decodes every file in `resources/music` and fails if one yields no sound.
 * `EnemyAITest` - the enemy AI rules: it only re-decides on a tile boundary and on a 1 in 16 roll,
-  rotates its goal between base/wander/player, takes the dominant axis towards its target, turns
-  around on 1 in 4 blocked ticks, fires on a 1 in 32 roll without aiming, and the four types have
-  their documented stats.
+  rotates its goal between base/wander/player, takes the dominant axis towards its target, fires on a
+  1 in 32 roll without aiming, shoots through what it can break, goes around what it cannot, never
+  reverses into its own tracks, and the four types have their documented stats.
 * `MenuBackgroundTest` - screenshots the menu and fails if it comes out blank (that is how the white
   menu of the packaged build was caught). Writes `test/out/menu-screenshot.png`.
 * `SmokeTest` - drives the real UI the way a player does (menu, Play, level 1, stage transition,
@@ -101,16 +101,30 @@ samples, so it works on every mixer.
 
 ## Enemy AI
 
-The enemies are modelled on the original Battle City (Famicom) rather than on a path finder, see
+The enemies start from the behaviour of the original Battle City (Famicom), see
 `src/game_objects/movables/EnemyTankBrain.java` for the mapping to the original's routines:
 
-* an enemy only picks a new direction while it stands on a tile boundary and only on a 1 in 16 roll
+* an enemy only re-decides while it stands on a tile boundary and only on a 1 in 16 roll
   (`EntityMovementAI`), and it skips its move that tick - otherwise it just drives on,
 * the goal rotates: chase the base, then wander randomly, then chase the player (`SpeedCtrlMove`),
   which is the original's "random detour, but eventually it goes for your base",
 * a chase takes the axis with the larger distance to the target first (`CalcDirToTarget`),
-* a blocked enemy turns around 1 time in 4 and otherwise bumps into the wall (`EntityMovementBlocked`),
-* it fires on a 1 in 32 roll per tick, without aiming (`EnemyFireTick`).
+* it fires on a 1 in 32 roll per tick, without aiming (`EnemyFireTick`),
+* it shoots the bricks in its way, which is how the original's tanks dig towards the base.
+
+Four things are different, because the original's tanks drive through each other while ours collide,
+and because its wall-bumping reads as jitter here:
+
+* a blocked enemy does not reverse 25% of the time (`EntityMovementBlocked`) - it turns a free corner
+  and only backs out when both sides are blocked, so it does not undo its own progress,
+* it picks the first direction that is actually free, and only faces a wall when nothing else is open,
+* it commits to a direction for half a second before it may re-decide,
+* it goes around a friend in the way quickly, and `NO_PROGRESS_TICKS` without progress always forces a
+  way out of a corner.
+
+Measured on stage 2 over the same window, against the previous version: path efficiency (net progress
+divided by distance walked) went from 0.20 to 0.47, direction reversals from 10 per tank to 3, and net
+progress from 1175 px to 3069 px.
 
 Four enemy types with the original's stats (basic, fast, power and armour with four hits,
 100/200/300/400 points) are spawned in a per stage mix. Since this game has a single enemy sprite set,

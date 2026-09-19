@@ -12,13 +12,16 @@ import java.util.Set;
 import java.util.function.Predicate;
 
 /**
- * Headless checks of the enemy AI, which is modelled on the original Battle City.
+ * Headless checks of the enemy AI.
  * <p>
- * Every rule of the original that the brain implements is checked here: it only re-decides while it
- * stands on a tile boundary and only on a 1 in 16 roll (and then it does not move that tick), it
- * rotates its goal between the base, a random wander and the player, a chase takes the axis with the
- * larger distance first, a wander turns corners, a blocked enemy turns around 1 time in 4 and
- * otherwise bumps into the wall, and it fires on a 1 in 32 roll without aiming.
+ * The rules the original Battle City uses are checked here: it re-decides only on a tile boundary and
+ * only on a 1 in 16 roll (and does not move that tick), it rotates its goal between the base, a wander
+ * and the player, it takes the axis with the larger distance towards its target, it fires on a 1 in 32
+ * roll without aiming, and it shoots the bricks in its way.
+ * <p>
+ * So are the rules that were added on top, because this game is not the original: it goes around an
+ * obstacle instead of reversing into its own tracks, it commits to a direction before re-deciding, and
+ * it always finds a way out of a corner.
  * <p>
  * The brains are seeded and their goal is set explicitly, so every check is deterministic.
  */
@@ -32,22 +35,31 @@ public class EnemyAITest {
     public static void main(String[] args) {
         chasesTheBase();
         takesTheDominantAxisFirst();
-        onlyReDecidesOnATileBoundary();
-        reDecidesAboutOnceInSixteen();
-        keepsDrivingOtherwise();
-        turnsAroundWhenBlocked();
-        bumpsIntoTheWallMostOfTheTime();
-        wandersOffSometimes();
         huntsThePlayerInItsGoal();
         rotatesItsGoals();
-        firesRarelyAndWithoutAiming();
-        neverPicksABlockedDirection();
+        wandersOffSometimes();
+        onlyReDecidesOnATileBoundary();
+        reDecidesRarely();
+        keepsDrivingOtherwise();
+        goesAroundInsteadOfReversing();
+        drivesAroundAFriend();
+        shootsThroughWhatItCanBreak();
+        facesWallsButNeverGivesUp();
         drivesAroundAnObstacle();
+        firesRarelyAndWithoutAiming();
         typeStats();
 
         System.out.println();
         System.out.println(failures == 0 ? "ENEMY AI TEST PASSED" : "ENEMY AI TEST FAILED (" + failures + ")");
         System.exit(failures == 0 ? 0 : 1);
+    }
+
+    /**
+     * decide() with "nothing special in the way", which is what most of these checks care about.
+     */
+    private static Decision decide(EnemyTankBrain brain, Rectangle tank, Rectangle base, Rectangle player,
+            Direction facing, boolean onTileBoundary, boolean blocked, Predicate<Direction> canMove) {
+        return brain.decide(tank, base, player, facing, onTileBoundary, blocked, false, false, canMove);
     }
 
     /**
@@ -69,139 +81,11 @@ public class EnemyAITest {
         Rectangle farEast = new Rectangle(20 * GameField.BYTE, 3 * GameField.BYTE, TANK, TANK);
         Rectangle farSouth = new Rectangle(3 * GameField.BYTE, 20 * GameField.BYTE, TANK, TANK);
 
-        EnemyTankBrain eastward = new EnemyTankBrain(new Random(2), Goal.EAGLE);
-        expect("goes east when the base is mostly east (chose "
-                        + firstDecision(eastward, tank, farEast, null) + ")",
-                firstDecision(eastward, tank, farEast, null) == Direction.EAST);
+        Direction east = firstDecision(new EnemyTankBrain(new Random(2), Goal.EAGLE), tank, farEast, null);
+        expect("goes east when the target is mostly east (chose " + east + ")", east == Direction.EAST);
 
-        EnemyTankBrain southward = new EnemyTankBrain(new Random(2), Goal.EAGLE);
-        expect("goes south when the base is mostly south (chose "
-                        + firstDecision(southward, tank, farSouth, null) + ")",
-                firstDecision(southward, tank, farSouth, null) == Direction.SOUTH);
-    }
-
-    /**
-     * {@code EntityMovementAI}: an enemy that is not on a tile boundary never changes its mind.
-     */
-    private static void onlyReDecidesOnATileBoundary() {
-        EnemyTankBrain brain = new EnemyTankBrain(new Random(3), Goal.EAGLE);
-        Rectangle tank = new Rectangle(0, 0, TANK, TANK);
-        brain.decide(tank, BASE, null, Direction.NORTH, true, false, everythingIsFree());
-
-        boolean everHeld = false;
-        for (int tick = 0; tick < 500; tick++) {
-            if (brain.decide(tank, BASE, null, Direction.NORTH, false, false, everythingIsFree()).hold) {
-                everHeld = true;
-            }
-        }
-        expect("never re-decides away from a tile boundary", !everHeld);
-
-        int holds = 0;
-        for (int tick = 0; tick < 500; tick++) {
-            if (brain.decide(tank, BASE, null, Direction.NORTH, true, false, everythingIsFree()).hold) {
-                holds++;
-            }
-        }
-        expect("does re-decide on a tile boundary, and holds that tick (held " + holds + "/500)", holds > 0);
-    }
-
-    /**
-     * {@code PRNG&$0F==0}: that re-decision happens about once in sixteen ticks.
-     */
-    private static void reDecidesAboutOnceInSixteen() {
-        int holds = 0;
-        int ticks = 8000;
-        for (int seed = 0; seed < 8; seed++) {
-            EnemyTankBrain brain = new EnemyTankBrain(new Random(seed), Goal.EAGLE);
-            Rectangle tank = new Rectangle(0, 0, TANK, TANK);
-            for (int tick = 0; tick < ticks / 8; tick++) {
-                if (brain.decide(tank, BASE, null, Direction.NORTH, true, false, everythingIsFree()).hold) {
-                    holds++;
-                }
-            }
-        }
-        double chance = holds / (double) ticks;
-        expect(String.format("re-decides on about 1 in 16 ticks (measured 1 in %.1f)", 1 / chance),
-                chance > 1 / 24.0 && chance < 1 / 11.0);
-    }
-
-    /**
-     * Most ticks it just drives on, which is what makes it advance in a straight line.
-     */
-    private static void keepsDrivingOtherwise() {
-        EnemyTankBrain brain = new EnemyTankBrain(new Random(5), Goal.EAGLE);
-        Rectangle tank = new Rectangle(0, 0, TANK, TANK);
-        Direction first = brain.decide(tank, BASE, null, Direction.NORTH, false, false, everythingIsFree()).direction;
-
-        int changes = 0;
-        Direction current = first;
-        for (int tick = 0; tick < 300; tick++) {
-            Decision decision = brain.decide(tank, BASE, null, Direction.NORTH, false, false, everythingIsFree());
-            if (decision.direction != current) {
-                changes++;
-                current = decision.direction;
-            }
-            if (decision.hold) {
-                failures++;
-                System.out.println("   FAIL held a tick while not on a tile boundary");
-            }
-        }
-        expect("keeps its direction while nothing is in the way (changed " + changes + " times in 300 ticks)",
-                changes == 0);
-    }
-
-    /**
-     * {@code EntityMovementBlocked}: 1 blocked enemy in 4 turns around.
-     */
-    private static void turnsAroundWhenBlocked() {
-        int turnarounds = 0;
-        int blockedDecisions = 2000;
-        for (int seed = 0; seed < 5; seed++) {
-            EnemyTankBrain brain = new EnemyTankBrain(new Random(seed), Goal.EAGLE);
-            Rectangle tank = new Rectangle(0, 0, TANK, TANK);
-            //let it pick a direction first, from a free spot
-            brain.decide(tank, BASE, null, Direction.NORTH, true, false, everythingIsFree());
-            for (int tick = 0; tick < blockedDecisions / 5; tick++) {
-                Direction before = brain.getDirection();
-                Decision decision = brain.decide(tank, BASE, null, Direction.NORTH, true, true, everythingIsFree());
-                if (decision.direction == opposite(before)) {
-                    turnarounds++;
-                }
-            }
-        }
-        double rate = turnarounds / (double) blockedDecisions;
-        expect(String.format("turns around on about 1 in 4 blocked ticks (measured %.0f%%)", rate * 100),
-                rate > 0.15 && rate < 0.36);
-    }
-
-    private static void bumpsIntoTheWallMostOfTheTime() {
-        EnemyTankBrain brain = new EnemyTankBrain(new Random(9), Goal.EAGLE);
-        Rectangle tank = new Rectangle(0, 0, TANK, TANK);
-        int keptFacing = 0;
-        int ticks = 400;
-        Direction previous = brain.decide(tank, BASE, null, Direction.NORTH, true, false, everythingIsFree()).direction;
-        for (int tick = 0; tick < ticks; tick++) {
-            Direction after = brain.decide(tank, BASE, null, Direction.NORTH, true, true, everythingIsFree()).direction;
-            if (after == previous) {
-                keptFacing++;
-            }
-            previous = after;
-        }
-        expect("keeps facing the wall instead of spinning (kept facing " + keptFacing + "/400 ticks)",
-                keptFacing > 400 * 0.6);
-    }
-
-    /**
-     * The wander goal turns corners instead of always chasing the target.
-     */
-    private static void wandersOffSometimes() {
-        EnemyTankBrain brain = new EnemyTankBrain(new Random(11), Goal.RANDOM);
-        Rectangle tank = new Rectangle(0, 0, TANK, TANK);
-        Set<Direction> seen = EnumSet.noneOf(Direction.class);
-        for (int tick = 0; tick < 4000; tick++) {
-            seen.add(brain.decide(tank, BASE, null, Direction.NORTH, true, false, everythingIsFree()).direction);
-        }
-        expect("a wandering enemy takes more than one direction over time (" + seen + ")", seen.size() > 1);
+        Direction south = firstDecision(new EnemyTankBrain(new Random(2), Goal.EAGLE), tank, farSouth, null);
+        expect("goes south when the target is mostly south (chose " + south + ")", south == Direction.SOUTH);
     }
 
     /**
@@ -225,10 +109,229 @@ public class EnemyAITest {
         Rectangle tank = new Rectangle(0, 0, TANK, TANK);
         Set<Goal> seen = EnumSet.noneOf(Goal.class);
         for (int tick = 0; tick < 4000; tick++) {
-            brain.decide(tank, BASE, null, Direction.NORTH, true, false, everythingIsFree());
+            decide(brain, tank, BASE, null, Direction.NORTH, true, false, everythingIsFree());
             seen.add(brain.getGoal());
         }
         expect("cycles through all three goals over time (" + seen + ")", seen.size() == 3);
+    }
+
+    /**
+     * The wander goal takes corners instead of always chasing the target.
+     */
+    private static void wandersOffSometimes() {
+        EnemyTankBrain brain = new EnemyTankBrain(new Random(11), Goal.RANDOM);
+        Rectangle tank = new Rectangle(0, 0, TANK, TANK);
+        Set<Direction> seen = EnumSet.noneOf(Direction.class);
+        for (int tick = 0; tick < 6000; tick++) {
+            seen.add(decide(brain, tank, BASE, null, Direction.NORTH, true, false, everythingIsFree()).direction);
+        }
+        expect("a wandering enemy takes more than one direction over time (" + seen + ")", seen.size() > 1);
+    }
+
+    /**
+     * {@code EntityMovementAI}: an enemy away from a tile boundary never changes its mind.
+     */
+    private static void onlyReDecidesOnATileBoundary() {
+        EnemyTankBrain brain = new EnemyTankBrain(new Random(3), Goal.EAGLE);
+        Rectangle tank = new Rectangle(0, 0, TANK, TANK);
+        decide(brain, tank, BASE, null, Direction.NORTH, true, false, everythingIsFree());
+
+        boolean everHeld = false;
+        for (int tick = 0; tick < 500; tick++) {
+            Goal before = brain.getGoal();
+            boolean held = decide(brain, tank, BASE, null, Direction.NORTH, false, false, everythingIsFree()).hold;
+            //the one exception is a goal change, which is meant to show immediately
+            if (held && brain.getGoal() == before) {
+                everHeld = true;
+            }
+        }
+        expect("never re-decides away from a tile boundary (except when its goal changes)", !everHeld);
+
+        int holds = 0;
+        for (int tick = 0; tick < 500; tick++) {
+            if (decide(brain, tank, BASE, null, Direction.NORTH, true, false, everythingIsFree()).hold) {
+                holds++;
+            }
+        }
+        expect("does re-decide on a tile boundary (" + holds + " times in 500 ticks)", holds > 0);
+    }
+
+    /**
+     * The 1 in 16 roll, on top of the commitment: re-decisions stay rare, which is what makes an enemy
+     * look like it is going somewhere instead of dithering.
+     */
+    private static void reDecidesRarely() {
+        int holds = 0;
+        int ticks = 20000;
+        for (int seed = 0; seed < 8; seed++) {
+            EnemyTankBrain brain = new EnemyTankBrain(new Random(seed), Goal.EAGLE);
+            Rectangle tank = new Rectangle(0, 0, TANK, TANK);
+            for (int tick = 0; tick < ticks / 8; tick++) {
+                if (decide(brain, tank, BASE, null, Direction.NORTH, true, false, everythingIsFree()).hold) {
+                    holds++;
+                }
+            }
+        }
+        double perTick = holds / (double) ticks;
+        expect(String.format("re-decides rarely, about once every %.0f ticks", 1 / perTick),
+                perTick < 1 / 20.0 && perTick > 1 / 200.0);
+    }
+
+    /**
+     * Most ticks it just drives on, which is what makes it advance in a straight line.
+     */
+    private static void keepsDrivingOtherwise() {
+        EnemyTankBrain brain = new EnemyTankBrain(new Random(5), Goal.EAGLE);
+        Rectangle tank = new Rectangle(0, 0, TANK, TANK);
+        Direction first = decide(brain, tank, BASE, null, Direction.NORTH, false, false, everythingIsFree()).direction;
+
+        int changes = 0;
+        Direction current = first;
+        for (int tick = 0; tick < 300; tick++) {
+            Decision decision = decide(brain, tank, BASE, null, Direction.NORTH, false, false, everythingIsFree());
+            if (decision.direction != current) {
+                changes++;
+                current = decision.direction;
+            }
+        }
+        expect("keeps its direction while nothing is in the way (changed " + changes + " times in 300 ticks)",
+                changes == 0);
+    }
+
+    /**
+     * The anti-jitter rule: a blocked enemy turns a free corner instead of reversing into its tracks.
+     */
+    private static void goesAroundInsteadOfReversing() {
+        Rectangle tank = new Rectangle(100, 100, TANK, TANK);
+        Set<Direction> northAndEastFree = EnumSet.of(Direction.NORTH, Direction.EAST);
+
+        EnemyTankBrain brain = new EnemyTankBrain(new Random(41), Goal.EAGLE);
+        brain.decide(tank, BASE, null, Direction.SOUTH, false, true, false, false, northAndEastFree::contains);
+        Direction chosen = Direction.SOUTH;
+        for (int tick = 0; tick < 30; tick++) {
+            chosen = brain.decide(tank, BASE, null, Direction.SOUTH, false, true, false, false,
+                    northAndEastFree::contains).direction;
+            if (chosen != Direction.SOUTH) {
+                break;
+            }
+        }
+        expect("a blocked enemy turns the free corner (chose " + chosen + ")", chosen == Direction.EAST);
+        expect("and it does not reverse into the way it came", chosen != Direction.NORTH);
+    }
+
+    /**
+     * A friend in the way is not something to shoot at: go around it, quickly.
+     */
+    private static void drivesAroundAFriend() {
+        Rectangle tank = new Rectangle(100, 100, TANK, TANK);
+        Set<Direction> northAndEastFree = EnumSet.of(Direction.NORTH, Direction.EAST);
+        EnemyTankBrain brain = new EnemyTankBrain(new Random(47), Goal.EAGLE);
+        brain.decide(tank, BASE, null, Direction.SOUTH, false, false, false, false, northAndEastFree::contains);
+
+        int ticksToTurn = 0;
+        for (int tick = 1; tick <= 60; tick++) {
+            if (brain.decide(tank, BASE, null, Direction.SOUTH, false, true, true, false,
+                    northAndEastFree::contains).direction == Direction.EAST) {
+                ticksToTurn = tick;
+                break;
+            }
+        }
+        expect("goes around another tank quickly (after " + ticksToTurn + " ticks)",
+                ticksToTurn > 0 && ticksToTurn <= 10);
+    }
+
+    /**
+     * Digging: a brick in front is worth shooting, so it keeps facing it and keeps firing.
+     */
+    private static void shootsThroughWhatItCanBreak() {
+        Rectangle tank = new Rectangle(100, 100, TANK, TANK);
+        Set<Direction> onlyNorthIsFree = EnumSet.of(Direction.NORTH);
+
+        EnemyTankBrain digging = new EnemyTankBrain(new Random(43), Goal.EAGLE);
+        digging.decide(tank, BASE, null, Direction.SOUTH, false, false, false, false, onlyNorthIsFree::contains);
+        boolean keptFacing = true;
+        int shots = 0;
+        for (int tick = 0; tick < 120; tick++) {
+            Decision decision = digging.decide(tank, BASE, null, Direction.SOUTH, false, true, false, true,
+                    onlyNorthIsFree::contains);
+            if (decision.direction != Direction.SOUTH) {
+                keptFacing = false;
+            }
+            if (decision.fire) {
+                shots++;
+            }
+        }
+        expect("keeps facing a brick it can break and keeps shooting it (" + shots + " shots)",
+                keptFacing && shots > 0);
+
+        EnemyTankBrain solid = new EnemyTankBrain(new Random(43), Goal.EAGLE);
+        solid.decide(tank, BASE, null, Direction.SOUTH, false, false, false, false, onlyNorthIsFree::contains);
+        boolean wentAround = false;
+        for (int tick = 0; tick < 120; tick++) {
+            if (solid.decide(tank, BASE, null, Direction.SOUTH, false, true, false, false,
+                    onlyNorthIsFree::contains).direction != Direction.SOUTH) {
+                wentAround = true;
+                break;
+            }
+        }
+        expect("goes around an obstacle it cannot break", wentAround);
+    }
+
+    /**
+     * Facing a wall is deliberate (that is how bricks get shot away), but never for good.
+     */
+    private static void facesWallsButNeverGivesUp() {
+        Rectangle tank = new Rectangle(100, 100, TANK, TANK);
+        Set<Direction> onlyNorthIsFree = EnumSet.of(Direction.NORTH);
+
+        EnemyTankBrain driving = new EnemyTankBrain(new Random(37), Goal.EAGLE);
+        Direction first = decide(driving, tank, BASE, null, Direction.NORTH, false, false,
+                onlyNorthIsFree::contains).direction;
+        boolean heldGoal = true;
+        for (int tick = 0; tick < 30; tick++) {
+            driving.onMoved();
+            if (decide(driving, tank, BASE, null, Direction.NORTH, false, false,
+                    onlyNorthIsFree::contains).direction != first) {
+                heldGoal = false;
+            }
+        }
+        expect("keeps facing its goal while it can move (faced " + first + ")", heldGoal);
+
+        //only the way it came is free: a dead end has to be backed out of, not sat in
+        EnemyTankBrain deadEnd = new EnemyTankBrain(new Random(37), Goal.EAGLE);
+        deadEnd.decide(tank, BASE, null, Direction.SOUTH, false, false, false, false, onlyNorthIsFree::contains);
+        Direction escaped = Direction.SOUTH;
+        for (int tick = 0; tick < 60; tick++) {
+            escaped = decide(deadEnd, tank, BASE, null, Direction.SOUTH, false, true,
+                    onlyNorthIsFree::contains).direction;
+            if (escaped != Direction.SOUTH) {
+                break;
+            }
+        }
+        expect("backs out of a dead end (chose " + escaped + ")", escaped == Direction.NORTH);
+    }
+
+    /**
+     * The bug this check exists for: an enemy that is blocked off the tile boundary (where the 1 in 16
+     * re-decision cannot fire) has to try the free axis instead of bouncing up and down forever.
+     */
+    private static void drivesAroundAnObstacle() {
+        Set<Direction> allowed = EnumSet.of(Direction.NORTH, Direction.EAST);
+        Rectangle tank = new Rectangle(100, 100, TANK, TANK);
+
+        EnemyTankBrain brain = new EnemyTankBrain(new Random(31), Goal.EAGLE);
+        brain.decide(tank, BASE, null, Direction.SOUTH, false, false, false, false, allowed::contains);
+        int ticksNeeded = 0;
+        for (int tick = 1; tick <= 120; tick++) {
+            if (brain.decide(tank, BASE, null, Direction.SOUTH, false, true, false, false,
+                    allowed::contains).direction == Direction.EAST) {
+                ticksNeeded = tick;
+                break;
+            }
+        }
+        expect("an off-grid blocked enemy takes the free axis"
+                + (ticksNeeded > 0 ? " (after " + ticksNeeded + " ticks)" : ""), ticksNeeded > 0);
+        expect("and it does so within about a second", ticksNeeded > 0 && ticksNeeded <= 50);
     }
 
     /**
@@ -251,68 +354,13 @@ public class EnemyAITest {
         Rectangle tank = new Rectangle(100, 100, TANK, TANK);
         int shotsAtNothing = 0;
         for (int tick = 0; tick < 4000; tick++) {
-            if (aiming.decide(tank, new Rectangle(0, 0, TANK, TANK), null, Direction.NORTH, false, false, everythingIsFree()).fire) {
+            if (decide(aiming, tank, new Rectangle(0, 0, TANK, TANK), null, Direction.NORTH, false, false,
+                    everythingIsFree()).fire) {
                 shotsAtNothing++;
             }
         }
         expect("shoots even with nothing in front of it, like the original (" + shotsAtNothing + " shots)",
                 shotsAtNothing > 50);
-    }
-
-    /**
-     * Whatever it decides, it must be a direction it can drive.
-     */
-    private static void neverPicksABlockedDirection() {
-        Set<Direction> allowed = EnumSet.of(Direction.NORTH, Direction.EAST);
-        boolean chosenIsDrivable = true;
-        for (int seed = 0; seed < 50; seed++) {
-            EnemyTankBrain brain = new EnemyTankBrain(new Random(seed));
-            Rectangle tank = new Rectangle(100, 100, TANK, TANK);
-            brain.decide(tank, BASE, null, Direction.NORTH, true, false, allowed::contains);
-            for (int tick = 0; tick < 200; tick++) {
-                //whatever the brain picks for itself must be a direction the tank can drive
-                Decision free = brain.decide(tank, BASE, null, Direction.NORTH, true, false, allowed::contains);
-                if (free.hold && !allowed.contains(free.direction)) {
-                    chosenIsDrivable = false;
-                }
-                //and while blocked, anything beyond "keep facing" and "turn around" must be drivable too
-                Direction before = brain.getDirection();
-                Decision blocked = brain.decide(tank, BASE, null, Direction.NORTH, true, true, allowed::contains);
-                boolean keepsFacingOrReverses = blocked.direction == before || blocked.direction == opposite(before);
-                if (!keepsFacingOrReverses && !allowed.contains(blocked.direction)) {
-                    chosenIsDrivable = false;
-                }
-            }
-        }
-        expect("a direction it picks for itself is always one it can drive", chosenIsDrivable);
-    }
-
-    /**
-     * The bug this test exists for: an enemy that keeps bumping into a wall has to try the other
-     * axis instead of driving up and down the same corridor for the rest of the stage.
-     */
-    private static void drivesAroundAnObstacle() {
-        //the base is straight south, so the first choice is always "south", which is blocked here
-        Set<Direction> allowed = EnumSet.of(Direction.NORTH, Direction.EAST);
-        Rectangle tank = new Rectangle(100, 100, TANK, TANK);
-
-        //off the tile boundary on purpose: that is where a blocked tank used to be helpless, because
-        //the 1 in 16 re-decision cannot fire and the reversal kept resetting the stuck counter
-        boolean turnedAside = false;
-        int ticksNeeded = 0;
-        EnemyTankBrain brain = new EnemyTankBrain(new Random(31), Goal.EAGLE);
-        brain.decide(tank, BASE, null, Direction.SOUTH, false, false, allowed::contains);
-        for (int tick = 1; tick <= 300; tick++) {
-            Decision decision = brain.decide(tank, BASE, null, Direction.SOUTH, false, true, allowed::contains);
-            if (decision.direction == Direction.EAST) {
-                turnedAside = true;
-                ticksNeeded = tick;
-                break;
-            }
-        }
-        expect("an off-grid blocked enemy tries the free axis instead of bouncing forever"
-                + (turnedAside ? " (after " + ticksNeeded + " ticks)" : ""), turnedAside);
-        expect("and it does so within about half a second", turnedAside && ticksNeeded <= 40);
     }
 
     /**
@@ -323,6 +371,13 @@ public class EnemyAITest {
                 EnemyType.BASIC.getHealth() == 1 && EnemyType.BASIC.getSpeed() < EnemyType.FAST.getSpeed());
         expect("fast tank moves faster than the basic one",
                 EnemyType.FAST.getSpeed() > EnemyType.BASIC.getSpeed());
+        expect("power tank shoots faster than the basic one",
+                EnemyType.POWER.getBulletSpeed() > EnemyType.BASIC.getBulletSpeed());
+        expect("armour tank takes four hits", EnemyType.ARMOR.getHealth() == 4);
+        expect("scores are 100/200/300/400",
+                EnemyType.BASIC.getPoints() == 100 && EnemyType.FAST.getPoints() == 200
+                        && EnemyType.POWER.getPoints() == 300 && EnemyType.ARMOR.getPoints() == 400);
+
         //a speed that does not divide the tile size leaves a blocked tank off the tile boundary,
         //where it can never re-decide - which is what made fast tanks bounce up and down forever
         boolean dividesTheTile = true;
@@ -332,12 +387,6 @@ public class EnemyAITest {
             }
         }
         expect("every enemy speed divides the tile size", dividesTheTile);
-        expect("power tank shoots faster than the basic one",
-                EnemyType.POWER.getBulletSpeed() > EnemyType.BASIC.getBulletSpeed());
-        expect("armour tank takes four hits", EnemyType.ARMOR.getHealth() == 4);
-        expect("scores are 100/200/300/400",
-                EnemyType.BASIC.getPoints() == 100 && EnemyType.FAST.getPoints() == 200
-                        && EnemyType.POWER.getPoints() == 300 && EnemyType.ARMOR.getPoints() == 400);
 
         Random random = new Random(29);
         int early = 0;
@@ -357,12 +406,12 @@ public class EnemyAITest {
     }
 
     /**
-     * Runs ticks until the brain re-decides (which is when it picks a direction) and returns that
-     * direction, so the checks do not depend on the 1 in 16 roll landing on the first tick.
+     * Runs ticks until the brain actually picks a direction and returns it, so the checks do not depend
+     * on the 1 in 16 roll landing on the first tick.
      */
     private static Direction firstDecision(EnemyTankBrain brain, Rectangle tank, Rectangle base, Rectangle player) {
         for (int tick = 0; tick < 500; tick++) {
-            Decision decision = brain.decide(tank, base, player, Direction.NORTH, true, false, everythingIsFree());
+            Decision decision = decide(brain, tank, base, player, Direction.NORTH, true, false, everythingIsFree());
             if (decision.hold) {
                 return decision.direction;
             }

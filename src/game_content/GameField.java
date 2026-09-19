@@ -3,6 +3,7 @@ package game_content;
 import game_objects.Destructible;
 import game_objects.map_objects.MapObject;
 import game_objects.map_objects.impassables.Base;
+import game_objects.map_objects.impassables.BrickWall;
 import game_objects.map_objects.powerups.PowerUp;
 import game_objects.map_objects.turf.Explosion;
 import game_objects.movables.*;
@@ -282,9 +283,10 @@ public class GameField extends JPanel implements Runnable {
 		Rectangle playerBounds = playerTank.isVisible() ? playerTank.getBounds() : null;
 		EnemyTankBrain brain = enemy.getBrain();
 
+		Obstacle obstacle = obstacleInFrontOf(enemy);
 		EnemyTankBrain.Decision decision = brain.decide(enemy.getBounds(), baseBounds, playerBounds,
 				enemy.getDirection(), onTileBoundary(enemy),
-				checkWallCollisions(enemy) || checkTankCollisions(enemy),
+				obstacle != Obstacle.NONE, obstacle == Obstacle.TANK, obstacle == Obstacle.BREAKABLE,
 				candidate -> !hitsWall(enemy, steppedBounds(enemy, candidate))
 						&& !hitsTank(enemy, steppedBounds(enemy, candidate)));
 
@@ -296,6 +298,8 @@ public class GameField extends JPanel implements Runnable {
 		}
 		if (!decision.hold && !checkWallCollisions(enemy) && !checkTankCollisions(enemy)) {
 			enemy.move();
+			//tell the brain it is making progress, so it only turns a corner when it really is stuck
+			brain.onMoved();
 		}
 	}
 
@@ -315,6 +319,37 @@ public class GameField extends JPanel implements Runnable {
 	private static boolean nearTileBoundary(int coordinate, int step) {
 		int remainder = Math.floorMod(coordinate, BYTE);
 		return remainder <= step || BYTE - remainder <= step;
+	}
+
+	/**
+	 * What stops a tank from driving on. The brain cares about the difference: a brick can be shot
+	 * away, steel cannot, and a friend in the way is a reason to go around instead of shooting.
+	 */
+	private enum Obstacle {
+		NONE, TANK, BREAKABLE, SOLID, EDGE
+	}
+
+	/**
+	 * @return what is in the way of the tank's next step
+	 */
+	private Obstacle obstacleInFrontOf(Tank tank) {
+		Rectangle nextBounds = tank.getTheoreticalBounds();
+		Rectangle currentBounds = tank.getBounds();
+
+		for (Tank other : tanks) {
+			if (other != tank && nextBounds.intersects(other.getBounds())
+					&& !currentBounds.intersects(other.getBounds())) {
+				return Obstacle.TANK;
+			}
+		}
+		for (MapObject mo : map) {
+			if (mo.isCollidable() && nextBounds.intersects(mo.getBounds())
+					&& !currentBounds.intersects(mo.getBounds())) {
+				//bricks and the base itself can be shot away, steel and water cannot
+				return mo instanceof BrickWall || mo instanceof Base ? Obstacle.BREAKABLE : Obstacle.SOLID;
+			}
+		}
+		return this.getBounds().contains(nextBounds) ? Obstacle.NONE : Obstacle.EDGE;
 	}
 
 	/**
