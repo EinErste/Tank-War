@@ -7,7 +7,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
-
+import java.io.InputStream;
+import java.net.URL;
 /**
  * Locates game resources (images, sounds, fonts) in a way that does not depend on
  * the working directory the game was started from.
@@ -91,6 +92,26 @@ public final class ResourceFile {
         return String.join(", ", locations);
     }
 
+    /**
+     * Looks the resource up as a URL, for the AWT APIs that only accept one
+     * ({@link java.awt.Toolkit#createImage(java.net.URL)} keeps animated GIFs animating).
+     *
+     * @param path resource path
+     * @return a file: URL or a class path URL
+     * @throws IOException if the resource cannot be found anywhere
+     */
+    public static URL url(String path) throws IOException {
+        File file = find(path);
+        if (file != null) {
+            return file.toURI().toURL();
+        }
+        URL classpathUrl = ResourceFile.class.getClassLoader().getResource(path);
+        if (classpathUrl != null) {
+            return classpathUrl;
+        }
+        throw new FileNotFoundException(
+                "Resource '" + path + "' not found. Looked in: " + triedLocations(path));
+    }
     private static List<File> candidateFiles(String path) {
         List<File> candidates = new ArrayList<>();
         candidates.add(new File(path));
