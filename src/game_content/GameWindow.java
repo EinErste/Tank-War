@@ -1,7 +1,11 @@
 package game_content;
 
 import java.awt.*;
-import java.io.File;
+import resources_classes.ResourceFile;
+
+import javax.imageio.ImageIO;
+import java.io.IOException;
+import java.io.InputStream;
 import javax.swing.*;
 
 public class GameWindow extends JFrame {
@@ -67,29 +71,38 @@ public class GameWindow extends JFrame {
 	 * Add font to windows environment
 	 */
 	private void createFont(){
-		try{
+		try (InputStream stream = ResourceFile.open("resources/fonts/mainFont.ttf")) {
 			GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
-			ge.registerFont(Font.createFont(Font.TRUETYPE_FONT, new File("resources/fonts/mainFont.ttf")));
-		} catch (Exception e){
-			System.out.println("font adding failed");
+			ge.registerFont(Font.createFont(Font.TRUETYPE_FONT, stream));
+		} catch (Exception e) {
+			System.err.println("Font 'resources/fonts/mainFont.ttf' could not be registered (" + e + ")");
 		}
-
 	}
 
 	/**
 	 * Set window icon
 	 */
 	private void setWindowIcon(){
-		Image iconImage =
-				Toolkit.getDefaultToolkit().createImage("resources/sprites/window/icon.png");
-		setIconImage(iconImage);
+		try (InputStream stream = ResourceFile.open("resources/sprites/window/icon.png")) {
+			setIconImage(ImageIO.read(stream));
+		} catch (IOException e) {
+			System.err.println("Window icon could not be loaded (" + e.getMessage() + ")");
+		}
 	}
 
 	public static void main(String[] args) {
 
 		EventQueue.invokeLater(() -> {
-			JFrame ex = new GameWindow();
-			ex.setVisible(true);
+			try {
+				//The constructor makes the window visible and loads the menu
+				new GameWindow();
+			} catch (Throwable t) {
+				t.printStackTrace();
+				JOptionPane.showMessageDialog(null,
+						"Tank War could not start:\n" + t,
+						"Tank War", JOptionPane.ERROR_MESSAGE);
+				System.exit(1);
+			}
 		});
 	}
 }

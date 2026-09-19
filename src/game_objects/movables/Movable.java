@@ -2,11 +2,8 @@ package game_objects.movables;
 
 import game_objects.Sprite;
 
-import javax.imageio.ImageIO;
 import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.io.File;
-import java.io.IOException;
 
 public abstract class Movable extends Sprite {
 
@@ -33,11 +30,11 @@ public abstract class Movable extends Sprite {
 			String dir = Direction.values()[i].toString().toLowerCase();
 			String str = String.format(imageName, dir);
 			try {
-				directions[i] = ImageIO.read(new File(str));
-			} catch (IOException e) {
-				e.printStackTrace();
+				directions[i] = scale(readImage(str));
+			} catch (IllegalStateException e) {
+				throw new IllegalStateException("Cannot load the " + dir + " sprite of '" + imageName + "'. "
+						+ e.getMessage(), e);
 			}
-			directions[i] = scale(directions[i]);
 		}
 		image = directions[currentDir.ordinal()];
 	}

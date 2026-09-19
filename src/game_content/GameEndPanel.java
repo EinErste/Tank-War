@@ -1,6 +1,6 @@
 package game_content;
 
-import javafx.scene.media.AudioClip;
+import resources_classes.AudioClip;
 import resources_classes.GameSound;
 import resources_classes.ScaledImage;
 

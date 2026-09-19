@@ -6,8 +6,6 @@ import game_objects.map_objects.impassables.Base;
 import game_objects.map_objects.powerups.PowerUp;
 import game_objects.map_objects.turf.Explosion;
 import game_objects.movables.*;
-import javafx.scene.media.AudioClip;
-import jdk.internal.util.xml.impl.Pair;
 import map_tools.Level;
 import map_tools.Map;
 import resources_classes.GameSound;
@@ -70,10 +68,17 @@ public class GameField extends JPanel implements Runnable {
 	private Thread animator;
 	private GameFieldPanel gameFieldPanel;
 	private Timer endTimer;
+	private Timer spawnTimer;
 	private Timer timeStopTimer;
 	private Random rand;
-	private boolean timeStopped;
-	private AudioClip[] timeStoppedSounds = new AudioClip[2];
+	/**
+	 * Written by the Swing timers, read by the animator thread
+	 */
+	private volatile boolean timeStopped;
+	/**
+	 * Set by {@link #dispose()}: the level is over, nothing may run any more
+	 */
+	private volatile boolean disposed;
 
 	public GameField(Level level, GameFieldPanel gameFieldPanel) {
 		this.gameFieldPanel = gameFieldPanel;
@@ -101,9 +106,7 @@ public class GameField extends JPanel implements Runnable {
 		rand = new Random();
 		bullets = ConcurrentHashMap.newKeySet();
 		powerUps = ConcurrentHashMap.newKeySet();
-		Timer spawnTimer = new Timer(2000, e -> {
-			spawnEnemyTank();
-		});
+		spawnTimer = new Timer(2000, e -> spawnEnemyTank());
 		spawnTimer.start();
 		spawnEnemyTank();
 	}
@@ -147,8 +150,12 @@ public class GameField extends JPanel implements Runnable {
 	public void addNotify() {
 		super.addNotify();
 
-		animator = new Thread(this);
-		animator.start();
+		//The panel can be added to a container more than once, the game loop must not be duplicated
+		if (animator == null || !animator.isAlive()) {
+			animator = new Thread(this, "game-loop");
+			animator.setDaemon(true);
+			animator.start();
+		}
 	}
 
 	/**
@@ -188,42 +195,61 @@ public class GameField extends JPanel implements Runnable {
 
 	}
 
+	/**
+	 * Freezes every enemy tank for a few seconds: first the "ZA WARUDO" shout, then the countdown,
+	 * after which the music comes back.
+	 */
 	private void stopTime(){
-		Timer timer = new Timer(4000, new ActionListener() {
+		if (timeStopTimer != null) {
+			timeStopTimer.stop();
+		}
+		GameSound.stopTimeSound[1].stop();
+		GameSound.stopTimeSound[0].stop();
+		GameSound.stopTimeSound[0].play();
+		gameFieldPanel.musicStop();
+
+		Timer shoutTimer = new Timer(4000, new ActionListener() {
 			@Override
 			public void actionPerformed(ActionEvent e) {
-				gameFieldPanel.musicStop();
-				if(!gameFieldPanel.isVisible()){
-					animator.interrupt();
+				if (disposed) {
 					return;
 				}
 				GameSound.stopTimeSound[1].stop();
 				GameSound.stopTimeSound[1].play();
 				timeStopped = true;
 				gameFieldPanel.requestFocusField();
-				if (timeStopTimer != null) {
-					timeStopTimer.stop();
-				}
 				timeStopTimer = new Timer(5700, k -> {
-					if(!gameFieldPanel.isVisible()){
-						animator.interrupt();
-						return;
-					}
 					timeStopped = false;
-					gameFieldPanel.musicPlay();
+					if (!disposed) {
+						gameFieldPanel.musicPlay();
+					}
 				});
-				timeStopTimer.start();
 				timeStopTimer.setRepeats(false);
+				timeStopTimer.start();
 			}
 		});
-		timer.setRepeats(false);
-		timer.start();
-		GameSound.stopTimeSound[1].stop();
-		GameSound.stopTimeSound[0].play();
+		shoutTimer.setRepeats(false);
+		shoutTimer.start();
 	}
 
-	public void interrupt() {
-		animator.interrupt();
+	/**
+	 * Ends this level for good: stops the game loop, the enemy spawner and every pending timer.
+	 * Without this the level that was left behind kept spawning enemy tanks forever.
+	 */
+	public void dispose() {
+		disposed = true;
+		if (spawnTimer != null) {
+			spawnTimer.stop();
+		}
+		if (endTimer != null) {
+			endTimer.stop();
+		}
+		if (timeStopTimer != null) {
+			timeStopTimer.stop();
+		}
+		if (animator != null) {
+			animator.interrupt();
+		}
 	}
 
 	private void checkAllTanksCollision() {
@@ -256,7 +282,6 @@ public class GameField extends JPanel implements Runnable {
 				endTimer = new Timer(3000, new ActionListener() {
 					@Override
 					public void actionPerformed(ActionEvent e) {
-						animator.interrupt();
 						gameFieldPanel.gameLost();
 					}
 				});
@@ -270,9 +295,11 @@ public class GameField extends JPanel implements Runnable {
 	 * Checking collisions of tanks with other tanks on the map
 	 */
 	private boolean checkTankCollisions(Tank tank) {
-		Rectangle tBounds = tank.getTheoreticalBounds();
+		Rectangle nextBounds = tank.getTheoreticalBounds();
+		Rectangle currentBounds = tank.getBounds();
 		for (Tank t : tanks) {
-			if (t != tank && tBounds.intersects(t.getBounds()))
+			//A tank that already overlaps another one (possible after a grid snap) has to be able to back out
+			if (t != tank && nextBounds.intersects(t.getBounds()) && !currentBounds.intersects(t.getBounds()))
 				return true;
 		}
 		return false;
@@ -282,22 +309,22 @@ public class GameField extends JPanel implements Runnable {
 	 * Checking collisions of tanks with other objects on the map
 	 */
 	private boolean checkWallCollisions(Tank tank) {
-		Rectangle tBounds = tank.getTheoreticalBounds();
+		Rectangle nextBounds = tank.getTheoreticalBounds();
+		Rectangle currentBounds = tank.getBounds();
 		for (MapObject mo : map) {
-			if (mo.isCollidable() && tBounds.intersects(mo.getBounds()))
+			//Only obstacles the tank is not standing in already block the move: turning snaps a tank
+			//onto the grid and could otherwise leave it stuck inside a wall for the rest of the level
+			if (mo.isCollidable() && nextBounds.intersects(mo.getBounds()) && !currentBounds.intersects(mo.getBounds()))
 				return true;
 		}
-		return !this.getBounds().contains(tBounds);
+		return !this.getBounds().contains(nextBounds);
 
 	}
 
 	//Timer must be initialized only one time or duplicate menu appears
 	private void checkWinCondtions() {
 		if (base.isDefeated() && endTimer == null) {
-			endTimer = new Timer(1000, e -> {
-				gameFieldPanel.gameLost();
-				animator.interrupt();
-			});
+			endTimer = new Timer(1000, e -> gameFieldPanel.gameLost());
 			endTimer.setRepeats(false);
 			endTimer.start();
 		}
@@ -310,9 +337,11 @@ public class GameField extends JPanel implements Runnable {
 			bullets.removeIf(bullet -> !bullet.isVisible());
 		}
 		for (Bullet b : bullets) {
+			if (!b.isVisible())
+				continue;
 			Rectangle bBounds = b.getTheoreticalBounds();
 			for (Bullet b1 : bullets) {
-				if (b != b1 && bBounds.intersects(b1.getBounds())) {
+				if (b != b1 && b1.isVisible() && bBounds.intersects(b1.getBounds())) {
 					b.destroy();
 					b1.destroy();
 					explosions.add(b.getExplosion());
@@ -320,7 +349,7 @@ public class GameField extends JPanel implements Runnable {
 				}
 			}
 			for (MapObject mo : map) {
-				if (mo instanceof Destructible && bBounds.intersects(mo.getBounds())) {
+				if (b.isVisible() && mo instanceof Destructible && bBounds.intersects(mo.getBounds())) {
 					((Destructible) mo).destroy();
 					b.destroy();
 					explosions.add(b.getExplosion());
@@ -328,7 +357,7 @@ public class GameField extends JPanel implements Runnable {
 
 			}
 			for (Tank t : tanks) {
-				if (bBounds.intersects(t.getBounds())) {
+				if (b.isVisible() && bBounds.intersects(t.getBounds())) {
 					b.destroy();
 					if(!(b instanceof EnemyBullet) || t instanceof PlayerTank) {
 						t.destroy();
@@ -339,9 +368,12 @@ public class GameField extends JPanel implements Runnable {
 					}
 				}
 			}
-			if (!this.getBounds().contains(bBounds))
-				b.destroy();
-			b.move();
+			if (b.isVisible()) {
+				if (!this.getBounds().contains(bBounds))
+					b.destroy();
+				else
+					b.move();
+			}
 		}
 
 	}
@@ -384,7 +416,6 @@ public class GameField extends JPanel implements Runnable {
 	 */
 	private void drawTanks(Graphics g) {
 		tanks.removeIf(enemyTank -> !enemyTank.isVisible());
-//		g.drawImage(playerTank.getImage(), playerTank.getX(), playerTank.getY(), this);
 		for (Tank tank : tanks) {
 			g.drawImage(tank.getImage(), tank.getX(), tank.getY(), this);
 		}
@@ -419,22 +450,18 @@ public class GameField extends JPanel implements Runnable {
 	/**
 	 * Method for running the game in a thread for continuous and uninterrupted game performance. We use a while-loop to perform some actions specified in a cycle method and then repaint the whole game.
 	 */
-	@SuppressWarnings("InfiniteLoopStatement")
 	@Override
 	public void run() {
 
+		long beforeTime = System.currentTimeMillis();
 
-		long beforeTime, timeDiff, sleep;
-
-		beforeTime = System.currentTimeMillis();
-
-		while (!Thread.currentThread().isInterrupted()) {
+		while (!Thread.currentThread().isInterrupted() && !disposed) {
 			try {
 			cycle();
 			repaint();
 
-			timeDiff = System.currentTimeMillis() - beforeTime;
-			sleep = DELAY - timeDiff;
+			long timeDiff = System.currentTimeMillis() - beforeTime;
+			long sleep = DELAY - timeDiff;
 
 			if (sleep < 0)
 				sleep = 2;
@@ -480,9 +507,5 @@ public class GameField extends JPanel implements Runnable {
 		public void keyReleased(KeyEvent e) {
 			playerTank.keyReleased(e);
 		}
-	}
-
-	public Thread getAnimator() {
-		return animator;
 	}
 }

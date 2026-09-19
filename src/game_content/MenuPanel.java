@@ -1,7 +1,7 @@
 package game_content;
 
-import javafx.scene.media.AudioClip;
 import map_tools.Level;
+import resources_classes.AudioClip;
 import resources_classes.GameSound;
 import resources_classes.ScaledImage;
 import javax.swing.*;
@@ -15,8 +15,10 @@ public class MenuPanel extends JPanel {
 
     //Music
     private AudioClip music;
+    //Keeps the music going, replaced the timer chain that used to leak a timer every 5 seconds
+    private Timer musicTimer;
     //Level chooser
-    private JComboBox levelsBox;
+    private JComboBox<Level> levelsBox;
     //Background gif
     private JLabel labelBackground;
     //Music boolean
@@ -62,20 +64,19 @@ public class MenuPanel extends JPanel {
      * Controls music playing endless
      */
     private void checkMusicPlaying(){
-        if(!musicStop){
-            Timer timer = new Timer(5000, new ActionListener() {
-                @Override
-                public void actionPerformed(ActionEvent e) {
-                    if (!music.isPlaying() && !musicStop){
-                        music = GameSound.nextMenuMusic();
-                        music.play();
-                    }
-                    checkMusicPlaying();
-                }
-            });
-            timer.setRepeats(false);
-            timer.start();
+        if(musicStop){
+            return;
         }
+        musicTimer = new Timer(5000, new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (!music.isPlaying() && !musicStop){
+                    music = GameSound.nextMenuMusic();
+                    music.play();
+                }
+            }
+        });
+        musicTimer.start();
     }
 
     /**
@@ -102,9 +103,8 @@ public class MenuPanel extends JPanel {
         playButton.setVerticalAlignment(SwingConstants.BOTTOM);
         playButton.setFocusPainted(false);
         playButton.addActionListener(e -> {
+            stopMusic();
             gameWindow.remove(MenuPanel.this);
-            musicStop=true;
-            music.stop();
             Level level = (Level)levelsBox.getSelectedItem();
             LoadScreenPanel loadScreenPanel = new LoadScreenPanel(level.ordinal()+1);
 
@@ -127,10 +127,23 @@ public class MenuPanel extends JPanel {
     }
 
     /**
+     * Stops the menu music and its keep-alive timer.
+     * Without this the timer kept running (and restarting the music) after leaving the menu.
+     */
+    private void stopMusic(){
+        musicStop = true;
+        if (musicTimer != null){
+            musicTimer.stop();
+            musicTimer = null;
+        }
+        music.stop();
+    }
+
+    /**
      * Creates JComboBox which contains levels
      */
     private void addLevelsComboBox(){
-        levelsBox = new JComboBox();
+        levelsBox = new JComboBox<>();
         levelsBox.setRenderer(new CustomComboBoxCellRenderer());
         levelsBox.setFont(new Font(fontName,0,37));
         levelsBox.setForeground(Color.BLACK);
@@ -145,28 +158,30 @@ public class MenuPanel extends JPanel {
     }
 
     //Help class
-    class CustomComboBoxCellRenderer extends JLabel implements ListCellRenderer {
+    class CustomComboBoxCellRenderer extends JLabel implements ListCellRenderer<Level> {
+
+        CustomComboBoxCellRenderer(){
+            setHorizontalAlignment(SwingConstants.CENTER);
+            setVerticalAlignment(SwingConstants.BOTTOM);
+            setFont(new Font(fontName,0,37));
+            setForeground(Color.BLACK);
+        }
+
+        @Override
+        public Dimension getPreferredSize(){
+            return new Dimension(300, 60);
+        }
 
         @Override
         public Component getListCellRendererComponent(
-                JList list,
-                Object value,
+                JList<? extends Level> list,
+                Level value,
                 int index,
                 boolean isSelected,
                 boolean cellHasFocus) {
 
-            JLabel label = new JLabel(){
-                public Dimension getPreferredSize(){
-                    return new Dimension(300, 60);
-                }
-            };
-            label.setText(String.valueOf(value));
-            label.setHorizontalAlignment(SwingConstants.CENTER);
-            label.setVerticalAlignment(SwingConstants.BOTTOM);
-            label.setFont(new Font(fontName,0,37));
-            label.setForeground(Color.BLACK);
-
-            return label;
+            setText(String.valueOf(value));
+            return this;
         }
     }
 

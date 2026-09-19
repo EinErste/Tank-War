@@ -1,7 +1,7 @@
 package game_content;
 
-import javafx.scene.media.AudioClip;
 import map_tools.Level;
+import resources_classes.AudioClip;
 import resources_classes.GameSound;
 import resources_classes.ScaledImage;
 import javax.swing.*;
@@ -26,11 +26,15 @@ public class GameFieldPanel extends JPanel {
     private int enemyTanksDestroyed;
     //Current level
     private Level level;
-    //Booleans which control music
-    private boolean musicMute;
-    private boolean musicStop;
+    //Booleans which control music, touched by both the game loop and the Swing thread
+    private volatile boolean musicMute;
+    private volatile boolean musicStop;
     //Interface mute button
     private JButton muteButton;
+    //Keeps the music going, replaced the timer chain that used to leak a timer every 5 seconds
+    private Timer musicTimer;
+    //True as soon as the level ended, so the lose and the win path can never both open the end panel
+    private volatile boolean finished;
     //Icon for mute button
     private Image mutedImage = ScaledImage.create("resources/sprites/menu/buttons_icon/mute_button.png",50,50);
     private Image unmutedImage = ScaledImage.create("resources/sprites/menu/buttons_icon/unmute_button.png",50,50);
@@ -55,20 +59,19 @@ public class GameFieldPanel extends JPanel {
      * Controls music playing endless
      */
     private void checkMusicPlaying(){
-        if(!musicStop){
-            Timer timer = new Timer(5000, new ActionListener() {
-                @Override
-                public void actionPerformed(ActionEvent e) {
-                    if (!music.isPlaying() && !musicMute && !musicStop){
-                        music = GameSound.nextBattleMusic();
-                        music.play();
-                    }
-                    checkMusicPlaying();
-                }
-            });
-            timer.setRepeats(false);
-            timer.start();
+        if(musicStop){
+            return;
         }
+        musicTimer = new Timer(5000, new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (!music.isPlaying() && !musicMute && !musicStop){
+                    music = GameSound.nextBattleMusic();
+                    music.play();
+                }
+            }
+        });
+        musicTimer.start();
     }
 
     /**
@@ -171,10 +174,9 @@ public class GameFieldPanel extends JPanel {
         exitButton.addActionListener(new ActionListener() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                musicStop=true;
-                music.stop();
+                finished = true;
+                tearDown();
                 gameWindow.remove(GameFieldPanel.this);
-                gameField.interrupt();
                 gameWindow.setRespawns(3);
                 gameWindow.add(new MenuPanel(gameWindow));
                 gameWindow.repaint();
@@ -195,15 +197,16 @@ public class GameFieldPanel extends JPanel {
      * Method which is called to change level
      */
     public void roundWon(){
-        musicStop = true;
-        music.stop();
+        if (finished){
+            return;
+        }
         if (level.ordinal()+1==Level.values().length){
             gameWon();
             return;
         }
-
+        finished = true;
+        tearDown();
         gameWindow.remove(this);
-        gameField.getAnimator().stop();
         this.setVisible(false);
         LoadScreenPanel loadScreenPanel = new LoadScreenPanel(level.ordinal()+2);
 
@@ -242,11 +245,13 @@ public class GameFieldPanel extends JPanel {
      * @param gameResult
      */
     private void gameEnd(boolean gameResult){
+        if (finished){
+            return;
+        }
+        finished = true;
+        tearDown();
         setVisible(false);
         gameWindow.remove(this);
-        gameField.interrupt();
-        musicStop=true;
-        music.stop();
         GameEndPanel gameEndPanel = new GameEndPanel(gameWindow, gameResult, level.ordinal()*GameField.ENEMY_COUNT+enemyTanksDestroyed);
         gameWindow.add(gameEndPanel);
         gameWindow.repaint();
@@ -254,23 +259,41 @@ public class GameFieldPanel extends JPanel {
     }
 
     /**
+     * Stops the music, the music keep-alive timer and the level itself.
+     * Called before the panel is thrown away, on the Swing thread.
+     */
+    private void tearDown(){
+        musicStop = true;
+        if (musicTimer != null){
+            musicTimer.stop();
+            musicTimer = null;
+        }
+        music.stop();
+        gameField.dispose();
+    }
+
+    /**
      * Minus one respawn and change JLabel
+     * <p>
+     * Called from the game loop thread, so only the label update is handed over to the Swing thread.
      */
     public void playerTankDestroyed(){
         gameWindow.playerTankDestroyed();
         int respawns = gameWindow.getRespawns();
         if(respawns!=-1){
-            numberOfRespawns.setText(respawns+"x");
+            SwingUtilities.invokeLater(() -> numberOfRespawns.setText(respawns+"x"));
         }
-
     }
 
     /**
      * Count enemy tanks destroyed
+     * <p>
+     * Called from the game loop thread, so only the label update is handed over to the Swing thread.
      */
     public void enemyTankDestroyed(){
         enemyTanksDestroyed++;
-        numberEnemyTanksLabel.setText(GameField.ENEMY_COUNT-enemyTanksDestroyed+"x");
+        int tanksLeft = GameField.ENEMY_COUNT-enemyTanksDestroyed;
+        SwingUtilities.invokeLater(() -> numberEnemyTanksLabel.setText(tanksLeft+"x"));
         if (enemyTanksDestroyed==GameField.ENEMY_COUNT){
             Timer timer = new Timer(3000, new ActionListener() {
                 @Override
@@ -292,17 +315,20 @@ public class GameFieldPanel extends JPanel {
      */
     public void playerRespawnGained(){
         gameWindow.playerRespawnGained();
-        numberOfRespawns.setText(gameWindow.getRespawns()+"x");
+        int respawns = gameWindow.getRespawns();
+        SwingUtilities.invokeLater(() -> numberOfRespawns.setText(respawns+"x"));
     }
 
     /**
      * Stop music
      */
     public void musicStop(){
-        muteButton.setIcon(new ImageIcon(mutedImage));
-        requestFocusField();
         musicMute=true;
         music.stop();
+        SwingUtilities.invokeLater(() -> {
+            muteButton.setIcon(new ImageIcon(mutedImage));
+            requestFocusField();
+        });
     }
 
     /**
@@ -311,11 +337,14 @@ public class GameFieldPanel extends JPanel {
     public void musicPlay(){
         music.stop();
         music = GameSound.nextBattleMusic();
-        muteButton.setIcon(new ImageIcon(unmutedImage));
-        if(isVisible())
-            music.play();
-        requestFocusField();
         musicMute=false;
+        if(isVisible()){
+            music.play();
+        }
+        SwingUtilities.invokeLater(() -> {
+            muteButton.setIcon(new ImageIcon(unmutedImage));
+            requestFocusField();
+        });
     }
 
 

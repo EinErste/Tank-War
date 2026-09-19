@@ -1,7 +1,5 @@
 package game_content;
 
-import resources_classes.ScaledImage;
-
 import javax.swing.*;
 
 import java.awt.*;
