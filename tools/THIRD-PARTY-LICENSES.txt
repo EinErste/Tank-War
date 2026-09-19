@@ -1,0 +1,23 @@
+Tank War - third party components bundled in a packaged build
+============================================================
+
+Tank War itself is this repository's code (see README.md).
+
+A packaged build (tools/package.*) bundles the following three unmodified libraries inside
+TankWar.jar, because the JDK has no MP3 decoder of its own and all the music of this game is MP3:
+
+  mp3spi 1.9.5.4          com.googlecode.soundlibs:mp3spi:1.9.5.4
+                          http://www.javazoom.net/mp3spi/mp3spi.html
+  JLayer 1.0.1.4          com.googlecode.soundlibs:jlayer:1.0.1.4
+                          http://www.javazoom.net/javalayer/javalayer.html
+  Tritonus shared 0.3.7-2 com.googlecode.soundlibs:tritonus-share:0.3.7-2
+                          http://www.tritonus.org/
+
+All three are distributed under the GNU Lesser General Public License (LGPL) version 2.1.
+The full license text is available at https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+The complete corresponding source code of each library can be downloaded from the Maven Central
+coordinates listed above (jar files ending in -sources.jar), or from the project pages.
+
+No changes were made to these libraries. They are used as a javax.sound.sampled service provider:
+mp3spi registers the AudioFileReader/FormatConversionProvider, JLayer performs the decoding and
+Tritonus provides the shared sampled-audio base classes.

@@ -7,3 +7,11 @@
 
 # Compiled files
 out/
+*.class
+test/out/
+
+# Optional dependencies downloaded by tools/get-deps.*
+lib/
+
+# Packaged portable builds (tools/package.*)
+dist/

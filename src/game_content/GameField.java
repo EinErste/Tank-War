@@ -3,11 +3,10 @@ package game_content;
 import game_objects.Destructible;
 import game_objects.map_objects.MapObject;
 import game_objects.map_objects.impassables.Base;
+import game_objects.map_objects.impassables.BrickWall;
 import game_objects.map_objects.powerups.PowerUp;
 import game_objects.map_objects.turf.Explosion;
 import game_objects.movables.*;
-import javafx.scene.media.AudioClip;
-import jdk.internal.util.xml.impl.Pair;
 import map_tools.Level;
 import map_tools.Map;
 import resources_classes.GameSound;
@@ -29,14 +28,6 @@ public class GameField extends JPanel implements Runnable {
 	 * Scale (for resize)
 	 */
 	public static final int SCALE = 3;
-	/**
-	 * Enemy count
-	 */
-	public static final int ENEMY_COUNT = 32;
-	/**
-	 * Maximum number of enemies on screen
-	 */
-	public static final int MAX_ENEMIES = 8;
 	/**
 	 * Size of the game map relative to the tile size. Actually its twice as small relative to the Tank because every map tile is divided into four destructible parts
 	 */
@@ -70,13 +61,29 @@ public class GameField extends JPanel implements Runnable {
 	private Thread animator;
 	private GameFieldPanel gameFieldPanel;
 	private Timer endTimer;
+	private Timer spawnTimer;
 	private Timer timeStopTimer;
 	private Random rand;
-	private boolean timeStopped;
-	private AudioClip[] timeStoppedSounds = new AudioClip[2];
+	/**
+	 * Stage being played, used to pick the enemy mix
+	 */
+	private Level level;
+	/**
+	 * How many enemies come and how hard they push
+	 */
+	private Difficulty difficulty;
+	/**
+	 * Written by the Swing timers, read by the animator thread
+	 */
+	private volatile boolean timeStopped;
+	/**
+	 * Set by {@link #dispose()}: the level is over, nothing may run any more
+	 */
+	private volatile boolean disposed;
 
-	public GameField(Level level, GameFieldPanel gameFieldPanel) {
+	public GameField(Level level, GameFieldPanel gameFieldPanel, Difficulty difficulty) {
 		this.gameFieldPanel = gameFieldPanel;
+		this.difficulty = difficulty;
 		initGameField(level);
 	}
 
@@ -92,6 +99,7 @@ public class GameField extends JPanel implements Runnable {
 	}
 
 	private void initMap(Level level) {
+		this.level = level;
 		addKeyListener(new Adapter());
 		map = Map.getLevelMap(level);
 		base = map.getBase();
@@ -101,9 +109,7 @@ public class GameField extends JPanel implements Runnable {
 		rand = new Random();
 		bullets = ConcurrentHashMap.newKeySet();
 		powerUps = ConcurrentHashMap.newKeySet();
-		Timer spawnTimer = new Timer(2000, e -> {
-			spawnEnemyTank();
-		});
+		spawnTimer = new Timer(2000, e -> spawnEnemyTank());
 		spawnTimer.start();
 		spawnEnemyTank();
 	}
@@ -115,7 +121,7 @@ public class GameField extends JPanel implements Runnable {
 	}
 
 	private void spawnEnemyTank() {
-		if (tanks.size() < MAX_ENEMIES+1 && tankAmount < ENEMY_COUNT) {
+		if (tanks.size() < difficulty.getEnemiesOnScreen() + 1 && tankAmount < difficulty.getEnemiesPerStage()) {
 			List<Integer> list = new ArrayList<>();
 			list.add(0);
 			list.add(BYTE*12);
@@ -124,7 +130,9 @@ public class GameField extends JPanel implements Runnable {
 			for (int x : list ) {
 				if (noTankAt(x, 0)) {
 					tankAmount++;
-					tanks.add(new EnemyTank(x, 0, Direction.SOUTH));
+					tanks.add(new EnemyTank(x, 0, Direction.SOUTH,
+							EnemyType.pickForStage(level.ordinal() + 1, rand, difficulty.getEliteBias()),
+							difficulty.getBrainSettings()));
 					break;
 				}
 			}
@@ -147,8 +155,12 @@ public class GameField extends JPanel implements Runnable {
 	public void addNotify() {
 		super.addNotify();
 
-		animator = new Thread(this);
-		animator.start();
+		//The panel can be added to a container more than once, the game loop must not be duplicated
+		if (animator == null || !animator.isAlive()) {
+			animator = new Thread(this, "game-loop");
+			animator.setDaemon(true);
+			animator.start();
+		}
 	}
 
 	/**
@@ -188,63 +200,177 @@ public class GameField extends JPanel implements Runnable {
 
 	}
 
+	/**
+	 * Freezes every enemy tank for a few seconds: first the "ZA WARUDO" shout, then the countdown,
+	 * after which the music comes back.
+	 */
 	private void stopTime(){
-		Timer timer = new Timer(4000, new ActionListener() {
+		if (timeStopTimer != null) {
+			timeStopTimer.stop();
+		}
+		GameSound.stopTimeSound[1].stop();
+		GameSound.stopTimeSound[0].stop();
+		GameSound.stopTimeSound[0].play();
+		gameFieldPanel.musicStop();
+
+		Timer shoutTimer = new Timer(4000, new ActionListener() {
 			@Override
 			public void actionPerformed(ActionEvent e) {
-				gameFieldPanel.musicStop();
-				if(!gameFieldPanel.isVisible()){
-					animator.interrupt();
+				if (disposed) {
 					return;
 				}
 				GameSound.stopTimeSound[1].stop();
 				GameSound.stopTimeSound[1].play();
 				timeStopped = true;
 				gameFieldPanel.requestFocusField();
-				if (timeStopTimer != null) {
-					timeStopTimer.stop();
-				}
 				timeStopTimer = new Timer(5700, k -> {
-					if(!gameFieldPanel.isVisible()){
-						animator.interrupt();
-						return;
-					}
 					timeStopped = false;
-					gameFieldPanel.musicPlay();
+					if (!disposed) {
+						gameFieldPanel.musicPlay();
+					}
 				});
-				timeStopTimer.start();
 				timeStopTimer.setRepeats(false);
+				timeStopTimer.start();
 			}
 		});
-		timer.setRepeats(false);
-		timer.start();
-		GameSound.stopTimeSound[1].stop();
-		GameSound.stopTimeSound[0].play();
+		shoutTimer.setRepeats(false);
+		shoutTimer.start();
 	}
 
-	public void interrupt() {
-		animator.interrupt();
+	/**
+	 * Ends this level for good: stops the game loop, the enemy spawner and every pending timer.
+	 * Without this the level that was left behind kept spawning enemy tanks forever.
+	 */
+	public void dispose() {
+		disposed = true;
+		if (spawnTimer != null) {
+			spawnTimer.stop();
+		}
+		if (endTimer != null) {
+			endTimer.stop();
+		}
+		if (timeStopTimer != null) {
+			timeStopTimer.stop();
+		}
+		if (animator != null) {
+			animator.interrupt();
+		}
 	}
 
 	private void checkAllTanksCollision() {
 		for (Tank t : tanks) {
-			if(! (t instanceof EnemyTank && timeStopped) ) {
-				if (t instanceof EnemyTank) {
-					t.fire();
-					if (rand.nextDouble() < 0.02)
-						t.changeDirection(Direction.values()[rand.nextInt(Direction.values().length)]);
+			if (t instanceof EnemyTank) {
+				if (!timeStopped) {
+					//frozen by the time stop power-up, the original suppresses enemy fire the same way
+					driveEnemyTank((EnemyTank) t);
 				}
-				if (!checkWallCollisions(t) && !checkTankCollisions(t)) {
-					t.move();
-				} else if(t instanceof EnemyTank){
-					for (int i = 0; i < 8; i++) {
-						t.changeDirection(Direction.values()[rand.nextInt(Direction.values().length)]);
-						if(!checkWallCollisions(t) && !checkTankCollisions(t))
-							break;
-					}
-				}
+			} else if (!checkWallCollisions(t) && !checkTankCollisions(t)) {
+				t.move();
 			}
 		}
+	}
+
+	/**
+	 * Lets the brain of an enemy tank decide what to do, the way the original's AI does it:
+	 * a new direction only on a tile boundary and on a 1 in 16 roll, otherwise it drives on.
+	 * <p>
+	 * The brain only knows rectangles and the {@code canMove} test below, the map itself stays here.
+	 */
+	private void driveEnemyTank(EnemyTank enemy) {
+		Rectangle baseBounds = base.getBounds();
+		Rectangle playerBounds = playerTank.isVisible() ? playerTank.getBounds() : null;
+		EnemyTankBrain brain = enemy.getBrain();
+
+		Obstacle obstacle = obstacleInFrontOf(enemy);
+		EnemyTankBrain.Decision decision = brain.decide(enemy.getBounds(), baseBounds, playerBounds,
+				enemy.getDirection(), onTileBoundary(enemy),
+				obstacle != Obstacle.NONE, obstacle == Obstacle.TANK, obstacle == Obstacle.BREAKABLE,
+				candidate -> !hitsWall(enemy, steppedBounds(enemy, candidate))
+						&& !hitsTank(enemy, steppedBounds(enemy, candidate)));
+
+		if (decision.direction != enemy.getDirection()) {
+			enemy.changeDirection(decision.direction);
+		}
+		if (decision.fire) {
+			enemy.fire();
+		}
+		if (!decision.hold && !checkWallCollisions(enemy) && !checkTankCollisions(enemy)) {
+			enemy.move();
+			//tell the brain it is making progress, so it only turns a corner when it really is stuck
+			brain.onMoved();
+		}
+	}
+
+	/**
+	 * @return true when the tank stands exactly on a tile boundary, the only place an enemy is allowed
+	 *         to change its mind ({@code posX&7==0 && posY&7==0} in the original)
+	 */
+	private static boolean onTileBoundary(Tank tank) {
+		int step = tank.getSpeed();
+		return nearTileBoundary(tank.getX(), step) && nearTileBoundary(tank.getY(), step);
+	}
+
+	/**
+	 * @return true when the coordinate sits on a tile boundary, or within one step of it - a tank can
+	 *         only ever land exactly on boundaries when its speed divides the tile size
+	 */
+	private static boolean nearTileBoundary(int coordinate, int step) {
+		int remainder = Math.floorMod(coordinate, BYTE);
+		return remainder <= step || BYTE - remainder <= step;
+	}
+
+	/**
+	 * What stops a tank from driving on. The brain cares about the difference: a brick can be shot
+	 * away, steel cannot, and a friend in the way is a reason to go around instead of shooting.
+	 */
+	private enum Obstacle {
+		NONE, TANK, BREAKABLE, SOLID, EDGE
+	}
+
+	/**
+	 * @return what is in the way of the tank's next step
+	 */
+	private Obstacle obstacleInFrontOf(Tank tank) {
+		Rectangle nextBounds = tank.getTheoreticalBounds();
+		Rectangle currentBounds = tank.getBounds();
+
+		for (Tank other : tanks) {
+			if (other != tank && nextBounds.intersects(other.getBounds())
+					&& !currentBounds.intersects(other.getBounds())) {
+				return Obstacle.TANK;
+			}
+		}
+		for (MapObject mo : map) {
+			if (mo.isCollidable() && nextBounds.intersects(mo.getBounds())
+					&& !currentBounds.intersects(mo.getBounds())) {
+				//bricks and the base itself can be shot away, steel and water cannot
+				return mo instanceof BrickWall || mo instanceof Base ? Obstacle.BREAKABLE : Obstacle.SOLID;
+			}
+		}
+		return this.getBounds().contains(nextBounds) ? Obstacle.NONE : Obstacle.EDGE;
+	}
+
+	/**
+	 * @return the bounds a tank would have after one step in this direction
+	 */
+	private static Rectangle steppedBounds(Tank tank, Direction direction) {
+		Rectangle bounds = tank.getBounds();
+		int step = tank.getSpeed();
+		switch (direction) {
+			case WEST:
+				bounds.x -= step;
+				break;
+			case EAST:
+				bounds.x += step;
+				break;
+			case NORTH:
+				bounds.y -= step;
+				break;
+			default:
+				bounds.y += step;
+				break;
+		}
+		return bounds;
 	}
 
 	private void checkTankRespawns(){
@@ -256,7 +382,6 @@ public class GameField extends JPanel implements Runnable {
 				endTimer = new Timer(3000, new ActionListener() {
 					@Override
 					public void actionPerformed(ActionEvent e) {
-						animator.interrupt();
 						gameFieldPanel.gameLost();
 					}
 				});
@@ -270,34 +395,50 @@ public class GameField extends JPanel implements Runnable {
 	 * Checking collisions of tanks with other tanks on the map
 	 */
 	private boolean checkTankCollisions(Tank tank) {
-		Rectangle tBounds = tank.getTheoreticalBounds();
-		for (Tank t : tanks) {
-			if (t != tank && tBounds.intersects(t.getBounds()))
-				return true;
-		}
-		return false;
+		return hitsTank(tank, tank.getTheoreticalBounds());
 	}
 
 	/**
 	 * Checking collisions of tanks with other objects on the map
 	 */
 	private boolean checkWallCollisions(Tank tank) {
-		Rectangle tBounds = tank.getTheoreticalBounds();
-		for (MapObject mo : map) {
-			if (mo.isCollidable() && tBounds.intersects(mo.getBounds()))
+		return hitsWall(tank, tank.getTheoreticalBounds());
+	}
+
+	/**
+	 * @param bounds where the tank would be
+	 * @return true when another tank is in the way that this one is not already overlapping
+	 */
+	private boolean hitsTank(Tank tank, Rectangle bounds) {
+		Rectangle currentBounds = tank.getBounds();
+		for (Tank t : tanks) {
+			//A tank that already overlaps another one (possible after a grid snap) has to be able to back out
+			if (t != tank && bounds.intersects(t.getBounds()) && !currentBounds.intersects(t.getBounds()))
 				return true;
 		}
-		return !this.getBounds().contains(tBounds);
+		return false;
+	}
 
+	/**
+	 * @param bounds where the tank would be
+	 * @return true when a wall is in the way that this one is not already overlapping, or when the
+	 *         tank would leave the field
+	 */
+	private boolean hitsWall(Tank tank, Rectangle bounds) {
+		Rectangle currentBounds = tank.getBounds();
+		for (MapObject mo : map) {
+			//Only obstacles the tank is not standing in already block the move: turning snaps a tank
+			//onto the grid and could otherwise leave it stuck inside a wall for the rest of the level
+			if (mo.isCollidable() && bounds.intersects(mo.getBounds()) && !currentBounds.intersects(mo.getBounds()))
+				return true;
+		}
+		return !this.getBounds().contains(bounds);
 	}
 
 	//Timer must be initialized only one time or duplicate menu appears
 	private void checkWinCondtions() {
 		if (base.isDefeated() && endTimer == null) {
-			endTimer = new Timer(1000, e -> {
-				gameFieldPanel.gameLost();
-				animator.interrupt();
-			});
+			endTimer = new Timer(1000, e -> gameFieldPanel.gameLost());
 			endTimer.setRepeats(false);
 			endTimer.start();
 		}
@@ -310,9 +451,11 @@ public class GameField extends JPanel implements Runnable {
 			bullets.removeIf(bullet -> !bullet.isVisible());
 		}
 		for (Bullet b : bullets) {
+			if (!b.isVisible())
+				continue;
 			Rectangle bBounds = b.getTheoreticalBounds();
 			for (Bullet b1 : bullets) {
-				if (b != b1 && bBounds.intersects(b1.getBounds())) {
+				if (b != b1 && b1.isVisible() && bBounds.intersects(b1.getBounds())) {
 					b.destroy();
 					b1.destroy();
 					explosions.add(b.getExplosion());
@@ -320,7 +463,7 @@ public class GameField extends JPanel implements Runnable {
 				}
 			}
 			for (MapObject mo : map) {
-				if (mo instanceof Destructible && bBounds.intersects(mo.getBounds())) {
+				if (b.isVisible() && mo instanceof Destructible && bBounds.intersects(mo.getBounds())) {
 					((Destructible) mo).destroy();
 					b.destroy();
 					explosions.add(b.getExplosion());
@@ -328,10 +471,10 @@ public class GameField extends JPanel implements Runnable {
 
 			}
 			for (Tank t : tanks) {
-				if (bBounds.intersects(t.getBounds())) {
+				if (b.isVisible() && bBounds.intersects(t.getBounds())) {
 					b.destroy();
 					if(!(b instanceof EnemyBullet) || t instanceof PlayerTank) {
-						t.destroy();
+						t.hit();
 						explosions.add(b.getExplosion());
 						if (t instanceof EnemyTank) {
 							gameFieldPanel.enemyTankDestroyed();
@@ -339,9 +482,12 @@ public class GameField extends JPanel implements Runnable {
 					}
 				}
 			}
-			if (!this.getBounds().contains(bBounds))
-				b.destroy();
-			b.move();
+			if (b.isVisible()) {
+				if (!this.getBounds().contains(bBounds))
+					b.destroy();
+				else
+					b.move();
+			}
 		}
 
 	}
@@ -384,7 +530,6 @@ public class GameField extends JPanel implements Runnable {
 	 */
 	private void drawTanks(Graphics g) {
 		tanks.removeIf(enemyTank -> !enemyTank.isVisible());
-//		g.drawImage(playerTank.getImage(), playerTank.getX(), playerTank.getY(), this);
 		for (Tank tank : tanks) {
 			g.drawImage(tank.getImage(), tank.getX(), tank.getY(), this);
 		}
@@ -419,22 +564,18 @@ public class GameField extends JPanel implements Runnable {
 	/**
 	 * Method for running the game in a thread for continuous and uninterrupted game performance. We use a while-loop to perform some actions specified in a cycle method and then repaint the whole game.
 	 */
-	@SuppressWarnings("InfiniteLoopStatement")
 	@Override
 	public void run() {
 
+		long beforeTime = System.currentTimeMillis();
 
-		long beforeTime, timeDiff, sleep;
-
-		beforeTime = System.currentTimeMillis();
-
-		while (!Thread.currentThread().isInterrupted()) {
+		while (!Thread.currentThread().isInterrupted() && !disposed) {
 			try {
 			cycle();
 			repaint();
 
-			timeDiff = System.currentTimeMillis() - beforeTime;
-			sleep = DELAY - timeDiff;
+			long timeDiff = System.currentTimeMillis() - beforeTime;
+			long sleep = DELAY - timeDiff;
 
 			if (sleep < 0)
 				sleep = 2;
@@ -480,9 +621,5 @@ public class GameField extends JPanel implements Runnable {
 		public void keyReleased(KeyEvent e) {
 			playerTank.keyReleased(e);
 		}
-	}
-
-	public Thread getAnimator() {
-		return animator;
 	}
 }

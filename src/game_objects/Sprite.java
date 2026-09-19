@@ -1,6 +1,7 @@
 package game_objects;
 
 import game_content.GameField;
+import resources_classes.ResourceFile;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
@@ -8,6 +9,7 @@ import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 
 public class Sprite {
 	private int x;
@@ -16,6 +18,12 @@ public class Sprite {
 	private int height;
 	private boolean visible;
 	protected BufferedImage image;
+
+	static {
+		//Decode images in memory: ImageIO would otherwise copy every sprite into a temporary cache
+		//file first, which is slower and fails if that cache is removed while the image is read
+		ImageIO.setUseCache(false);
+	}
 
 	public Sprite(int x, int y) {
 		this.x = x;
@@ -34,12 +42,39 @@ public class Sprite {
 	 * @param imageName name of an image
 	 */
 	protected void loadImage(String imageName) {
-		try {
-			image = ImageIO.read(new File(imageName));
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
+		image = readImage(imageName);
 		image = scale(image);
+	}
+
+	/**
+	 * Reads an image from the resources folder.
+	 * <p>
+	 * A missing or unreadable file used to end up as a {@link NullPointerException} deep inside the
+	 * rendering code; now it fails immediately with the path that could not be resolved.
+	 *
+	 * @param imageName name (path) of an image
+	 * @return the loaded image, never null
+	 */
+	protected static BufferedImage readImage(String imageName) {
+		BufferedImage loaded;
+		File file = ResourceFile.find(imageName);
+		try {
+			if (file != null) {
+				//straight from disk: no temporary ImageIO cache file involved
+				loaded = ImageIO.read(file);
+			} else {
+				try (InputStream stream = ResourceFile.open(imageName)) {
+					loaded = ImageIO.read(stream);
+				}
+			}
+		} catch (IOException e) {
+			throw new IllegalStateException("Cannot load image '" + imageName + "'. " + e.getMessage(), e);
+		}
+		if (loaded == null) {
+			throw new IllegalStateException("Cannot decode image '" + imageName
+					+ "': the file is not a readable image format");
+		}
+		return loaded;
 	}
 
 	/**
@@ -56,6 +91,7 @@ public class Sprite {
 			Graphics2D g = dbi.createGraphics();
 			AffineTransform at = AffineTransform.getScaleInstance(sc, sc);
 			g.drawRenderedImage(sbi, at);
+			g.dispose();
 		}
 		return dbi;
 	}

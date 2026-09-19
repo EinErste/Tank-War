@@ -8,7 +8,16 @@ import java.util.ArrayList;
 public abstract class Tank extends Movable implements Destructible {
 
 	private final static int SPEED = GameField.SCALE;
+	/**
+	 * Pixels the tank moves per tick. The player uses {@link #SPEED}, enemy tanks use the speed of
+	 * their type, like the original where a fast tank moves more often than a basic one.
+	 */
+	private final int speed;
 	private int bulletSpeed = 2;
+	/**
+	 * Hits left before the tank is destroyed; only armour tanks have more than one.
+	 */
+	private int health = 1;
 	/**
 	 * Delay between bullets (in milliseconds)
 	 */
@@ -17,8 +26,16 @@ public abstract class Tank extends Movable implements Destructible {
 	private long bulletTimer;
 
 	public Tank(int x, int y, Direction dir, int delay) {
+		this(x, y, dir, delay, SPEED);
+	}
+
+	/**
+	 * @param speed pixels to move per tick
+	 */
+	public Tank(int x, int y, Direction dir, int delay, int speed) {
 		super(x, y, dir);
 		this.delay = delay;
+		this.speed = speed;
 		init();
 	}
 
@@ -29,6 +46,29 @@ public abstract class Tank extends Movable implements Destructible {
 	@Override
 	public void destroy() {
 		setVisible(false);
+	}
+
+	/**
+	 * A bullet hit the tank: armour tanks take a few hits, everything else dies right away.
+	 */
+	public void hit() {
+		if (--health <= 0) {
+			destroy();
+		}
+	}
+
+	/**
+	 * @return hits this tank takes before it is destroyed
+	 */
+	public int getHealth() {
+		return health;
+	}
+
+	/**
+	 * @param health hits this tank takes before it is destroyed
+	 */
+	protected void setHealth(int health) {
+		this.health = health;
 	}
 
 	public void changeDirection(Direction dir) {
@@ -50,25 +90,39 @@ public abstract class Tank extends Movable implements Destructible {
 		switch (dir) {
 			case WEST:
 				image = directions[0];
-				dx = -SPEED;
+				dx = -speed;
 				dy = 0;
 				break;
 			case EAST:
 				image = directions[1];
-				dx = SPEED;
+				dx = speed;
 				dy = 0;
 				break;
 			case NORTH:
 				image = directions[2];
-				dy = -SPEED;
+				dy = -speed;
 				dx = 0;
 				break;
 			case SOUTH:
 				image = directions[3];
-				dy = SPEED;
+				dy = speed;
 				dx = 0;
 				break;
 		}
+	}
+
+	/**
+	 * @return the direction this tank is driving in
+	 */
+	public Direction getDirection() {
+		return currentDir;
+	}
+
+	/**
+	 * @return how many pixels this tank moves per tick
+	 */
+	public int getSpeed() {
+		return speed;
 	}
 
 	/**
@@ -108,9 +162,9 @@ public abstract class Tank extends Movable implements Destructible {
 				break;
 		}
 		if (this instanceof EnemyTank)
-			bullets.add(new EnemyBullet(x, y, currentDir,2));
+			bullets.add(new EnemyBullet(x, y, currentDir, bulletSpeed));
 		else
-			bullets.add(new Bullet(x, y, currentDir,bulletSpeed));
+			bullets.add(new Bullet(x, y, currentDir, bulletSpeed));
 		bulletTimer = System.currentTimeMillis();
 	}
 

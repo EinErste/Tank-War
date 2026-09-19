@@ -1,6 +1,5 @@
 package game_objects.movables;
 
-import game_content.GameField;
 import game_objects.Destructible;
 
 import java.awt.event.KeyEvent;

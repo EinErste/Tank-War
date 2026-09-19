@@ -1,7 +1,5 @@
 package game_objects.movables;
 
-import java.util.HashSet;
-import java.util.Set;
 
 /**
  * Enum for directions. It is used for simplifying the code readability in some places.

@@ -1,6 +1,6 @@
 package game_content;
 
-import javafx.scene.media.AudioClip;
+import resources_classes.AudioClip;
 import resources_classes.GameSound;
 import resources_classes.ScaledImage;
 
@@ -21,10 +21,13 @@ public class GameEndPanel extends JPanel {
     private GameWindow gameWindow;
     //Count tanks destroyed
     private int tanksDestroyed;
+    //How many enemies a stage sends, which is what the stage count is worked out from
+    private Difficulty difficulty;
 
-    public GameEndPanel(GameWindow gameWindow, boolean win, int tanksDestroyed){
+    public GameEndPanel(GameWindow gameWindow, boolean win, int tanksDestroyed, Difficulty difficulty){
         this.gameWindow = gameWindow;
         this.tanksDestroyed = tanksDestroyed;
+        this.difficulty = difficulty;
         setLayout(null);
         setBounds(0,0,windowWidth, windowHeight);
         setBackground(Color.DARK_GRAY);
@@ -81,7 +84,7 @@ public class GameEndPanel extends JPanel {
      * Creates JLabel with text "Stages completed: number of stages" and stage icon
      */
     private void addGameStatsStages(){
-        JLabel textTank = new JLabel("<html><font color=white>Stages completed: </font><font color=red>" + tanksDestroyed/GameField.ENEMY_COUNT +"</font></html>");
+        JLabel textTank = new JLabel("<html><font color=white>Stages completed: </font><font color=red>" + tanksDestroyed/difficulty.getEnemiesPerStage() +"</font></html>");
         textTank.setFont(new Font(fontName,0,30));
         textTank.setForeground(Color.WHITE);
         textTank.setBounds(100,275,800,100);

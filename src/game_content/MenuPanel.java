@@ -1,7 +1,7 @@
 package game_content;
 
-import javafx.scene.media.AudioClip;
 import map_tools.Level;
+import resources_classes.AudioClip;
 import resources_classes.GameSound;
 import resources_classes.ScaledImage;
 import javax.swing.*;
@@ -15,8 +15,12 @@ public class MenuPanel extends JPanel {
 
     //Music
     private AudioClip music;
+    //Keeps the music going, replaced the timer chain that used to leak a timer every 5 seconds
+    private Timer musicTimer;
     //Level chooser
-    private JComboBox levelsBox;
+    private JComboBox<Level> levelsBox;
+    //Difficulty chooser
+    private JComboBox<Difficulty> difficultyBox;
     //Background gif
     private JLabel labelBackground;
     //Music boolean
@@ -30,6 +34,7 @@ public class MenuPanel extends JPanel {
         setLayout(null);
         addText();
         addPlayButton();
+        addDifficultyComboBox();
         addLevelsComboBox();
         addBackground();
         playMusic();
@@ -62,20 +67,19 @@ public class MenuPanel extends JPanel {
      * Controls music playing endless
      */
     private void checkMusicPlaying(){
-        if(!musicStop){
-            Timer timer = new Timer(5000, new ActionListener() {
-                @Override
-                public void actionPerformed(ActionEvent e) {
-                    if (!music.isPlaying() && !musicStop){
-                        music = GameSound.nextMenuMusic();
-                        music.play();
-                    }
-                    checkMusicPlaying();
-                }
-            });
-            timer.setRepeats(false);
-            timer.start();
+        if(musicStop){
+            return;
         }
+        musicTimer = new Timer(5000, new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (!music.isPlaying() && !musicStop){
+                    music = GameSound.nextMenuMusic();
+                    music.play();
+                }
+            }
+        });
+        musicTimer.start();
     }
 
     /**
@@ -97,25 +101,33 @@ public class MenuPanel extends JPanel {
         playButton.setFont(new Font(fontName,1,50));
         playButton.setForeground(Color.BLACK);
         playButton.setBackground(new Color(172,17,21));
-        playButton.setBounds(250,400,300,80);
+        playButton.setBounds(250,330,300,70);
         playButton.setBorderPainted(false);
         playButton.setVerticalAlignment(SwingConstants.BOTTOM);
         playButton.setFocusPainted(false);
         playButton.addActionListener(e -> {
+            stopMusic();
             gameWindow.remove(MenuPanel.this);
-            musicStop=true;
-            music.stop();
             Level level = (Level)levelsBox.getSelectedItem();
-            LoadScreenPanel loadScreenPanel = new LoadScreenPanel(level.ordinal()+1);
+            Difficulty difficulty = (Difficulty)difficultyBox.getSelectedItem();
+            gameWindow.setRespawns(difficulty.getLives());
+            LoadScreenPanel loadScreenPanel = new LoadScreenPanel(level.ordinal()+1, difficulty);
 
             Timer timer = new Timer(1000, new ActionListener() {
                 @Override
                 public void actionPerformed(ActionEvent e) {
-                    gameWindow.remove(loadScreenPanel);
-                    GameFieldPanel gameFieldPanel = new GameFieldPanel(gameWindow,level);
-                    gameWindow.add(gameFieldPanel);
-                    gameWindow.repaint();
-                    gameFieldPanel.requestFocusField();
+                    try {
+                        gameWindow.remove(loadScreenPanel);
+                        GameFieldPanel gameFieldPanel = new GameFieldPanel(gameWindow, level, difficulty);
+                        gameWindow.add(gameFieldPanel);
+                        gameWindow.revalidate();
+                        gameWindow.repaint();
+                        gameFieldPanel.requestFocusField();
+                    } catch (Throwable t) {
+                        //a level that cannot be built would otherwise leave the player on this screen
+                        GameWindow.showError("Stage " + (level.ordinal()+1) + " could not be started.", t);
+                        gameWindow.showMenu();
+                    }
                 }
             });
             timer.setRepeats(false);
@@ -127,15 +139,56 @@ public class MenuPanel extends JPanel {
     }
 
     /**
+     * Stops the menu music and its keep-alive timer.
+     * Without this the timer kept running (and restarting the music) after leaving the menu.
+     */
+    private void stopMusic(){
+        musicStop = true;
+        if (musicTimer != null){
+            musicTimer.stop();
+            musicTimer = null;
+        }
+        music.stop();
+    }
+
+    /**
+     * Leaving the window always stops the music, whichever way the menu was left.
+     */
+    @Override
+    public void removeNotify(){
+        stopMusic();
+        super.removeNotify();
+    }
+
+    /**
+     * Creates JComboBox which contains the difficulties
+     */
+    private void addDifficultyComboBox(){
+        difficultyBox = new JComboBox<>();
+        difficultyBox.setRenderer(new CustomComboBoxCellRenderer<Difficulty>());
+        difficultyBox.setFont(new Font(fontName,0,37));
+        difficultyBox.setForeground(Color.BLACK);
+        difficultyBox.setBackground(new Color(172,17,21));
+        difficultyBox.setBounds(250,415,300,70);
+        difficultyBox.setToolTipText("Choose difficulty");
+        difficultyBox.setMaximumRowCount(3);
+        for (Difficulty difficulty : Difficulty.values()) {
+            difficultyBox.addItem(difficulty);
+        }
+        difficultyBox.setSelectedItem(Difficulty.NORMAL);
+        add(difficultyBox);
+    }
+
+    /**
      * Creates JComboBox which contains levels
      */
     private void addLevelsComboBox(){
-        levelsBox = new JComboBox();
-        levelsBox.setRenderer(new CustomComboBoxCellRenderer());
+        levelsBox = new JComboBox<>();
+        levelsBox.setRenderer(new CustomComboBoxCellRenderer<Level>());
         levelsBox.setFont(new Font(fontName,0,37));
         levelsBox.setForeground(Color.BLACK);
         levelsBox.setBackground(new Color(172,17,21));
-        levelsBox.setBounds(250,500,300,80);
+        levelsBox.setBounds(250,505,300,70);
         levelsBox.setToolTipText("Choose desired level");
         levelsBox.setMaximumRowCount(2);
         for (Level level : Level.values()) {
@@ -144,29 +197,31 @@ public class MenuPanel extends JPanel {
         add(levelsBox);
     }
 
-    //Help class
-    class CustomComboBoxCellRenderer extends JLabel implements ListCellRenderer {
+    //Help class, used for both the difficulty and the level chooser
+    class CustomComboBoxCellRenderer<T> extends JLabel implements ListCellRenderer<T> {
+
+        CustomComboBoxCellRenderer(){
+            setHorizontalAlignment(SwingConstants.CENTER);
+            setVerticalAlignment(SwingConstants.BOTTOM);
+            setFont(new Font(fontName,0,37));
+            setForeground(Color.BLACK);
+        }
+
+        @Override
+        public Dimension getPreferredSize(){
+            return new Dimension(300, 60);
+        }
 
         @Override
         public Component getListCellRendererComponent(
-                JList list,
-                Object value,
+                JList<? extends T> list,
+                T value,
                 int index,
                 boolean isSelected,
                 boolean cellHasFocus) {
 
-            JLabel label = new JLabel(){
-                public Dimension getPreferredSize(){
-                    return new Dimension(300, 60);
-                }
-            };
-            label.setText(String.valueOf(value));
-            label.setHorizontalAlignment(SwingConstants.CENTER);
-            label.setVerticalAlignment(SwingConstants.BOTTOM);
-            label.setFont(new Font(fontName,0,37));
-            label.setForeground(Color.BLACK);
-
-            return label;
+            setText(String.valueOf(value));
+            return this;
         }
     }
 
